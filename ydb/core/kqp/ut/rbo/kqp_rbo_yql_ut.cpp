@@ -394,22 +394,18 @@ Y_UNIT_TEST_SUITE(KqpRboYql) {
                 PRAGMA YqlSelect = 'force';
                 select sum(t1.a + 1 + t1.c) as sumExpr0, sum(t1.c + 2) as sumExpr1 from `/Root/t1` as t1 group by t1.b order by sumExpr0;
             )",
-            /*
             R"(
                 PRAGMA YqlSelect = 'force';
                 select sum(distinct t1.b) as sum, t1.a from `/Root/t1` as t1 group by t1.a order by sum, t1.a;
             )",
-            */
             R"(
                 PRAGMA YqlSelect = 'force';
                 select sum(t1.a) + 1, t1.b from `/Root/t1` as t1 group by t1.b order by t1.b;
             )",
-            /*
             R"(
                 PRAGMA YqlSelect = 'force';
                 select count(distinct t1.a), t1.b from `/Root/t1` as t1 group by t1.b, t1.c order by t1.b;
             )",
-            */
             R"(
                 PRAGMA YqlSelect = 'force';
                 select avg(t1.b) from `/Root/t1` as t1;
@@ -528,9 +524,9 @@ Y_UNIT_TEST_SUITE(KqpRboYql) {
                                             R"([[[4];[1]];[[6];[2]]])",
                                             R"([[[4];[0];[1]]])",
                                             R"([[[10];[8]];[[15];[12]]])",
-                                            //R"([[[1];1];[[1];3];[[2];0];[[2];2];[[2];4]])",
+                                            R"([[[1];1];[[1];3];[[2];0];[[2];2];[[2];4]])",
                                             R"([[5;[1]];[7;[2]]])",
-                                            //R"([[2u;[1]];[3u;[2]]])",
+                                            R"([[2u;[1]];[3u;[2]]])",
                                             R"([[[1.6]]])",
                                             R"([[2.;[2.]];[2.;[2.]]])",
                                             R"([[[2]];[[6]]])",
@@ -889,7 +885,7 @@ Y_UNIT_TEST_SUITE(KqpRboYql) {
 
     Y_UNIT_TEST(TPCH_YQL) {
        //RunTPCHYqlBenchmark(/*columnstore*/ true, {}, /*new rbo*/ false);
-       RunTPCHYqlBenchmark(/*columnstore*/ true, {1, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, /*16,*/ 19}, /*new rbo*/ true);
+       RunTPCHYqlBenchmark(/*columnstore*/ true, {1, 2, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 16, 19}, /*new rbo*/ true);
     }
 
     void InsertIntoSchema0(NYdb::NTable::TTableClient &db, std::string tableName, int numRows) {
@@ -994,6 +990,88 @@ Y_UNIT_TEST_SUITE(KqpRboYql) {
             R"([[0]])",
             R"([[0]])",
             R"([[0]])",
+        };
+
+        for (ui32 i = 0; i < queries.size(); ++i) {
+            const auto &query = queries[i];
+            auto result = session2.ExecuteDataQuery(query, TTxControl::BeginTx().CommitTx()).GetValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+            //Cout << FormatResultSetYson(result.GetResultSet(0)) << Endl;
+            UNIT_ASSERT_VALUES_EQUAL(FormatResultSetYson(result.GetResultSet(0)), results[i]);
+        }
+    }
+
+    Y_UNIT_TEST(CorrelatedSubquery) {
+        NKikimrConfig::TAppConfig appConfig;
+        appConfig.MutableTableServiceConfig()->SetEnableNewRBO(true);
+        appConfig.MutableTableServiceConfig()->SetAllowOlapDataQuery(true);
+        appConfig.MutableTableServiceConfig()->SetEnableFallbackToYqlOptimizer(false);
+        appConfig.MutableTableServiceConfig()->SetDefaultLangVer(NYql::GetMaxLangVersion());
+        appConfig.MutableTableServiceConfig()->SetBackportMode(NKikimrConfig::TTableServiceConfig_EBackportMode_All);
+        TKikimrRunner kikimr(NKqp::TKikimrSettings(appConfig).SetWithSampleTables(false));
+        auto db = kikimr.GetTableClient();
+        auto session = db.CreateSession().GetValueSync().GetSession();
+
+        session.ExecuteSchemeQuery(R"(
+            CREATE TABLE `/Root/foo` (
+                id	Int64	NOT NULL,
+                name	String,
+                primary key(id)
+            ) with (Store = Column);
+
+            CREATE TABLE `/Root/bar` (
+                id	Int64	NOT NULL,
+                lastname	String,
+                primary key(id)
+            ) with (Store = Column);
+        )").GetValueSync();
+
+        NYdb::TValueBuilder rowsTableFoo;
+        rowsTableFoo.BeginList();
+        for (size_t i = 0; i < 4; ++i) {
+            rowsTableFoo.AddListItem()
+                .BeginStruct()
+                .AddMember("id").Int64(i)
+                .AddMember("name").String(std::to_string(i) + "_name")
+                .EndStruct();
+        }
+        rowsTableFoo.EndList();
+
+        auto resultUpsert = db.BulkUpsert("/Root/foo", rowsTableFoo.Build()).GetValueSync();
+        UNIT_ASSERT_C(resultUpsert.IsSuccess(), resultUpsert.GetIssues().ToString());
+
+        NYdb::TValueBuilder rowsTableBar;
+        rowsTableBar.BeginList();
+        for (size_t i = 0; i < 4; ++i) {
+            rowsTableBar.AddListItem()
+                .BeginStruct()
+                .AddMember("id").Int64(i)
+                .AddMember("lastname").String(std::to_string(i) + "_name")
+                .EndStruct();
+        }
+        rowsTableBar.EndList();
+
+        resultUpsert = db.BulkUpsert("/Root/bar", rowsTableBar.Build()).GetValueSync();
+        UNIT_ASSERT_C(resultUpsert.IsSuccess(), resultUpsert.GetIssues().ToString());
+
+        db = kikimr.GetTableClient();
+        auto session2 = db.CreateSession().GetValueSync().GetSession();
+
+        std::vector<std::string> queries = {
+            R"(
+                PRAGMA YqlSelect = 'force';
+                SELECT bar.id FROM `/Root/bar` as bar where bar.id == (SELECT max(foo.id) FROM `/Root/foo` as foo WHERE foo.id == bar.id AND foo.name == lastname AND foo.id==1);
+            )",
+             R"(
+                PRAGMA YqlSelect = 'force';
+                SELECT bar.id FROM `/Root/bar` as bar where EXISTS (SELECT foo.id FROM `/Root/foo` as foo WHERE foo.id == bar.id AND foo.name == lastname AND foo.id==1);
+            )",
+        };
+
+        // TODO: The order of result is not defined, we need order by to add more interesting tests.
+        std::vector<std::string> results = {
+            R"([[1]])",
+            R"([[1]])",
         };
 
         for (ui32 i = 0; i < queries.size(); ++i) {

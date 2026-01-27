@@ -305,7 +305,7 @@ const TTypeAnnotationNode* GetReadTableRowTypeFullText(TExprContext& ctx, const 
 
     TVector<const TItemExprType*> resultItems;
     for (auto item : select) {
-        if (item.Value() == "_yql_full_text_relevance") {
+        if (item.Value() == NTableIndex::NFulltext::FullTextRelevanceColumn) {
             auto itemType = ctx.MakeType<TItemExprType>(TString(item.Value()), ctx.MakeType<TDataExprType>(NUdf::EDataSlot::Double));
             resultItems.push_back(itemType);
             YQL_ENSURE(itemType->Validate(select.Pos(), ctx));
@@ -2401,7 +2401,7 @@ TStatus AnnotateKqpSinkEffect(const TExprNode::TPtr& node, TExprContext& ctx) {
 }
 
 TStatus AnnotateTableSinkSettings(const TExprNode::TPtr& input, TExprContext& ctx) {
-    if (!EnsureMinMaxArgsCount(*input, 7, 8, ctx)) {
+    if (!EnsureMinMaxArgsCount(*input, 8, 9, ctx)) {
         return TStatus::Error;
     }
     input->SetTypeAnn(ctx.MakeType<TVoidExprType>());
@@ -2427,6 +2427,26 @@ TStatus AnnotateSublinkBase(const TExprNode::TPtr& node, TExprContext& ctx) {
             node->SetTypeAnn(ctx.MakeType<TDataExprType>(EDataSlot::Bool));
         }
     }
+    return TStatus::Ok;
+}
+
+TStatus AnnotateInfuseDependents(const TExprNode::TPtr& node, TExprContext& ctx) {
+    auto input = node->Child(TKqpInfuseDependents::idx_Input);
+    auto itemType = input->GetTypeAnn()->Cast<TListExprType>()->GetItemType()->Cast<TStructExprType>();
+    TVector<const TItemExprType*> structItemTypes = itemType->GetItems();
+
+    auto columns = node->Child(TKqpInfuseDependents::idx_Columns);
+    auto types = node->Child(TKqpInfuseDependents::idx_Types);
+
+    for (size_t i=0; i<columns->ChildrenSize(); i++) {
+        auto columnType = types->Child(i)->GetTypeAnn()->Cast<TTypeExprType>()->GetType();
+        auto correlatedType = ctx.MakeType<TItemExprType>(columns->Child(i)->Content(), columnType);
+        structItemTypes.push_back(correlatedType);
+    }
+
+    auto newStructType = ctx.MakeType<TStructExprType>(structItemTypes);
+    node->SetTypeAnn(ctx.MakeType<TListExprType>(newStructType));
+
     return TStatus::Ok;
 }
 
@@ -2943,6 +2963,10 @@ TAutoPtr<IGraphTransformer> CreateKqpTypeAnnotationTransformer(const TString& cl
 
             if (TKqpSublinkBase::Match(input.Get())) {
                 return AnnotateSublinkBase(input, ctx);
+            }
+
+            if (TKqpInfuseDependents::Match(input.Get())) {
+                return AnnotateInfuseDependents(input, ctx);
             }
 
             if (TKqpOpRead::Match(input.Get())) {
