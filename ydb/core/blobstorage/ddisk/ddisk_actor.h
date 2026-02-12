@@ -25,7 +25,6 @@ namespace NKikimrBlobStorage::NDDisk::NInternal {
     XX(Sync) \
     XX(WritePersistentBuffer) \
     XX(ReadPersistentBuffer) \
-    XX(FlushPersistentBuffer) \
     XX(ErasePersistentBuffer) \
     XX(ListPersistentBuffer) \
     /**/
@@ -48,7 +47,7 @@ namespace NKikimr::NDDisk {
         template<typename TRecord>
         struct THasWriteInstructionField {
             template<typename T> static constexpr auto check(T*) -> typename std::is_same<
-                std::decay_t<decltype(std::declval<T>().GetWriteInstruction())>,
+                std::decay_t<decltype(std::declval<T>().GetInstruction())>,
                 NKikimrBlobStorage::NDDisk::TWriteInstruction
             >::type;
 
@@ -174,6 +173,7 @@ namespace NKikimr::NDDisk {
 
         THashMap<ui64, THashMap<ui64, TChunkRef>> ChunkRefs; // TabletId -> (VChunkIndex -> ChunkIdx)
         TIntrusivePtr<TPDiskParams> PDiskParams;
+        TFileHandle DiskFd;
         std::vector<TChunkIdx> OwnedChunksOnBoot;
         ui64 ChunkMapSnapshotLsn = Max<ui64>();
         std::queue<TPendingEvent> PendingQueries;
@@ -248,7 +248,7 @@ namespace NKikimr::NDDisk {
         void IssuePDiskLogRecord(TLogSignature signature, TChunkIdx chunkIdxToCommit, const NProtoBuf::Message& data,
             ui64 *startingPointLsnPtr, std::function<void()> callback);
 
-        NKikimrBlobStorage::NDDisk::NInternal::TPersistentBufferChunkMapLogRecord CreatePersistentBufferChunkMapSnapshot();
+        NKikimrBlobStorage::NDDisk::NInternal::TPersistentBufferChunkMapLogRecord CreatePersistentBufferChunkMapSnapshot(const std::vector<ui64>& newChunkIdxs = {});
         NKikimrBlobStorage::NDDisk::NInternal::TChunkMapLogRecord CreateChunkMapSnapshot();
         NKikimrBlobStorage::NDDisk::NInternal::TChunkMapLogRecord CreateChunkMapIncrement(ui64 tabletId, ui64 vChunkIndex,
             TChunkIdx chunkIdx);
@@ -307,7 +307,7 @@ namespace NKikimr::NDDisk {
                 }
 
                 if constexpr (NPrivate::THasWriteInstructionField<TRecord>::value) {
-                    const TWriteInstruction instruction(record.GetWriteInstruction());
+                    const TWriteInstruction instruction(record.GetInstruction());
                     size_t size = 0;
                     if (instruction.PayloadId) {
                         const TRope& data = ev.Get()->GetPayload(*instruction.PayloadId);
@@ -402,12 +402,15 @@ namespace NKikimr::NDDisk {
         std::map<std::tuple<ui64, ui64>, TPersistentBuffer> PersistentBuffers;
         ui64 PersistentBufferInMemoryCacheSize = 0;
 
+        TString PersistentBufferToString();
+
         void SanitizePersistentBufferInMemoryCache(TPersistentBuffer::TRecord& record, bool force = false);
 
         static constexpr ui32 SectorSize = 4096;
         static constexpr ui32 SectorInChunk = 32768;
         static constexpr ui32 ChunkSize = SectorSize * SectorInChunk;
         static constexpr ui32 MaxChunks = 128;
+        static constexpr ui32 PersistentBufferInitChunks = 4;
         static constexpr ui32 MaxSectorsPerBufferRecord = 128;
         static constexpr ui32 MaxPersistentBufferInMemoryCache = ChunkSize;
         static constexpr ui32 MaxPersistentBufferChunkRestoreInflight = 8;
@@ -468,20 +471,8 @@ namespace NKikimr::NDDisk {
         void GetPersistentBufferRecordData(TDDiskActor::TPersistentBuffer::TRecord& pr, std::function<void(TRope data)> callback);
         void ProcessPersistentBufferWrite(TEvWritePersistentBuffer::TPtr ev);
 
-        struct TWriteInFlight {
-            TActorId Sender;
-            ui64 Cookie;
-            TActorId InterconnectionSessionId;
-            NWilson::TSpan Span;
-            ui32 Size;
-        };
-
-        ui64 NextWriteCookie = 1;
-        THashMap<ui64, TWriteInFlight> WritesInFlight;
-
         void Handle(TEvWritePersistentBuffer::TPtr ev);
         void Handle(TEvReadPersistentBuffer::TPtr ev);
-        void Handle(TEvFlushPersistentBuffer::TPtr ev);
         void Handle(TEvErasePersistentBuffer::TPtr ev);
         void Handle(TEvWriteResult::TPtr ev);
         void Handle(TEvents::TEvUndelivered::TPtr ev);
