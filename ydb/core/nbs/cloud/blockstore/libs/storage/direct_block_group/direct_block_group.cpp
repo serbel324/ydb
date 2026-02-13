@@ -111,7 +111,7 @@ NThreading::TFuture<TWriteBlocksLocalResponse> TDirectBlockGroup::WriteBlocksLoc
         const auto& ddiskConnection = PersistentBufferConnections[i];
         ++StorageRequestId;
 
-        LOG_INFO_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "WriteBlocksLocal" << " requestId# " << StorageRequestId);
+        LOG_DEBUG_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "WriteBlocksLocal" << " requestId# " << StorageRequestId);
 
         auto future = StorageTransport->WritePersistentBuffer(
             ddiskConnection.GetServiceId(),
@@ -218,9 +218,9 @@ void TDirectBlockGroup::ProcessSyncQueue()
 
         ++StorageRequestId;
 
-        LOG_INFO_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "ProcessSyncQueue" << " requestId# " << StorageRequestId);
+        LOG_DEBUG_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "ProcessSyncQueue" << " requestId# " << StorageRequestId);
 
-        auto future = StorageTransport->Sync(
+        auto future = StorageTransport->SyncWithPersistentBuffer(
             ddiskConnection.GetServiceId(),
             ddiskConnection.Credentials,
             NKikimr::NDDisk::TBlockSelector(
@@ -238,7 +238,7 @@ void TDirectBlockGroup::ProcessSyncQueue()
 
         future.Subscribe([this, requestId = StorageRequestId](const auto& f) {
             const auto& result = f.GetValue();
-            HandleSyncResult(requestId, result);
+            HandleSyncWithPersistentBufferResult(requestId, result);
         });
 
         RequestHandlersByStorageRequestId[StorageRequestId] = syncRequestHandler;
@@ -246,9 +246,9 @@ void TDirectBlockGroup::ProcessSyncQueue()
     }
 }
 
-void TDirectBlockGroup::HandleSyncResult(
+void TDirectBlockGroup::HandleSyncWithPersistentBufferResult(
     ui64 storageRequestId,
-    const NKikimrBlobStorage::NDDisk::TEvSyncResult& result)
+    const NKikimrBlobStorage::NDDisk::TEvSyncWithPersistentBufferResult& result)
 {
     auto guard = Guard(Lock);
 
@@ -287,7 +287,7 @@ void TDirectBlockGroup::RequestBlockErase(
 
     ++StorageRequestId;
 
-    LOG_INFO_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "RequestBlockErase" << " requestId# " << StorageRequestId);
+    LOG_DEBUG_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "RequestBlockErase" << " requestId# " << StorageRequestId);
 
     auto future = StorageTransport->ErasePersistentBuffer(
         PersistentBufferConnections[requestHandler.GetPersistentBufferIndex()]
@@ -364,7 +364,7 @@ NThreading::TFuture<TReadBlocksLocalResponse> TDirectBlockGroup::ReadBlocksLocal
 
     ++StorageRequestId;
 
-    LOG_INFO_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "ReadBlocksLocal" << " requestId# " << StorageRequestId);
+    LOG_DEBUG_S(TActivationContext::AsActorContext(), NKikimrServices::NBS_PARTITION, "ReadBlocksLocal" << " requestId# " << StorageRequestId);
 
     if (!BlocksMeta[startIndex].IsFlushedToDDisk()) {
         const auto& ddiskConnection = PersistentBufferConnections[0];

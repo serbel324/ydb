@@ -103,18 +103,8 @@ void TTopicWorkloadKeyedWriterProducer::WaitForContinuationToken(const TDuration
             << " in writer " << Params_.WriterIdx
             << ": foundEvent - " << foundEvent);
 
-        if (foundEvent) {
-            auto variant = WriteSession_->GetEvent(false).value();
-            if (std::holds_alternative<NYdb::NTopic::TWriteSessionEvent::TReadyToAcceptEvent>(variant)) {
-                auto event = std::get<NYdb::NTopic::TWriteSessionEvent::TReadyToAcceptEvent>(variant);
-                ContinuationTokens_.push(std::move(event.ContinuationToken));
-                WRITE_LOG(Params_.Log, ELogPriority::TLOG_DEBUG, TStringBuilder()
-                                << "Producer " << ProducerId_
-                                << " in writer " << Params_.WriterIdx
-                                << ": Got new ContinuationToken token");
-            } else {
-                ythrow yexception() << "Unexpected event type in WaitForContinuationToken";
-            }
+        if (!foundEvent) {
+            return;
         }
     }
 }
@@ -144,6 +134,16 @@ void TTopicWorkloadKeyedWriterProducer::HandleAckEvent(NYdb::NTopic::TWriteSessi
                                    << ack.Details->Offset << " InflightTime " << inflightTime << " WriteTime "
                                    << ack.Stat->WriteTime << " SessionId " << SessionId_ << " ack SeqNo " << ack.SeqNo);
     }
+}
+
+void TTopicWorkloadKeyedWriterProducer::HandleReadyToAcceptEvent(NYdb::NTopic::TWriteSessionEvent::TReadyToAcceptEvent& event)
+{
+    std::lock_guard lk(Lock_);
+    ContinuationTokens_.push(std::move(event.ContinuationToken));
+    WRITE_LOG(Params_.Log, ELogPriority::TLOG_DEBUG, TStringBuilder()
+        << "Producer " << ProducerId_
+        << " in writer " << Params_.WriterIdx
+        << ": Got new ContinuationToken token");
 }
 
 void TTopicWorkloadKeyedWriterProducer::HandleSessionClosed(const NYdb::NTopic::TSessionClosedEvent& event)
@@ -176,4 +176,3 @@ size_t TTopicWorkloadKeyedWriterProducer::InflightMessagesCnt() const
 {
     return InflightMessagesCount_.load(std::memory_order_relaxed);
 }
-
