@@ -136,10 +136,10 @@ Y_UNIT_TEST_SUITE(RequestValidation) {
     }
 
     Y_UNIT_TEST(TestMultiputSameId) {
-        TestSameId(false);
+        TestSameId(true);
     }
 
     Y_UNIT_TEST(TestMultiputSameIdSameData) {
-        TestSameId(true);
+        TestSameId(false);
     }
 }
