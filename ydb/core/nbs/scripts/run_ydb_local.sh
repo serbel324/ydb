@@ -229,7 +229,7 @@ function create_ddisk_pool {
 function create_partition {
     echo ""
     echo "Create partition"
-    dstool --endpoint grpc://localhost:$GRPC_PORT nbs partition create --pool ddp1
+    dstool --endpoint grpc://localhost:$GRPC_PORT nbs partition create --pool ddp1 --disk-id test --sync-requests-batch-size 3
 }
 
 
@@ -243,6 +243,10 @@ case "$ACTION" in
         start_compute_node
         create_ddisk_pool
         create_partition
+        ;;
+    fast_start)
+        start_ydbd
+        start_compute_node
         ;;
     *)
         echo "Usage: $0 [start|stop] [--port PORT] [--mon-port PORT]"
