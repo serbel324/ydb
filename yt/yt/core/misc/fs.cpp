@@ -400,6 +400,15 @@ TPathStatistics GetPathStatistics(const std::string& path)
 
 i64 GetDirectorySize(const std::string& path, bool ignoreUnavailableFiles, bool deduplicateByINodes, bool checkDeviceId)
 {
+    return GetDirectoriesSize({path}, ignoreUnavailableFiles, deduplicateByINodes, checkDeviceId);
+}
+
+i64 GetDirectoriesSize(const std::vector<std::string>& paths, bool ignoreUnavailableFiles, bool deduplicateByINodes, bool checkDeviceId)
+{
+    if (paths.empty()) {
+        return 0;
+    }
+
     auto wrapNoEntryError = [&] (std::function<void()> func) {
         try {
             func();
@@ -418,19 +427,29 @@ i64 GetDirectorySize(const std::string& path, bool ignoreUnavailableFiles, bool 
         }
     };
 
+    std::optional<TDeviceId> deviceId;
     std::queue<std::string> directories;
-    directories.push(path);
-
-    TPathStatistics rootDirStatistics;
-    wrapNoEntryError([&] {
-        rootDirStatistics = GetPathStatistics(path);
-    });
+    for (const auto& path: paths) {
+        if (checkDeviceId) {
+            // Make sure that seed directories reside on the same device.
+            wrapNoEntryError([&] {
+                if (!deviceId) {
+                    deviceId = GetPathStatistics(path).DeviceId;
+                } else if (*deviceId != GetPathStatistics(path).DeviceId) {
+                    THROW_ERROR_EXCEPTION("Seed directories reside on different devices")
+                        << TErrorAttribute("path", path)
+                        << TErrorAttribute("device_id", ToString(GetPathStatistics(path).DeviceId))
+                        << TErrorAttribute("other_path", paths.front())
+                        << TErrorAttribute("other_device_id", ToString(*deviceId));
+                }
+            });
+        }
+        directories.push(path);
+    }
 
     THashSet<ui64> visitedInodes;
 
     i64 size = 0;
-
-
     while (!directories.empty()) {
         const auto& directory = directories.front();
 
@@ -455,7 +474,7 @@ i64 GetDirectorySize(const std::string& path, bool ignoreUnavailableFiles, bool 
                         return;
                     }
                 }
-                if (checkDeviceId && fileStatistics.DeviceId != rootDirStatistics.DeviceId) {
+                if (deviceId && fileStatistics.DeviceId != *deviceId) {
                     return;
                 }
                 if (fileStatistics.Size > 0) {
@@ -551,12 +570,12 @@ std::string JoinPaths(const std::string& path1, const std::string& path2)
 std::string NormalizePathSeparators(const std::string& path)
 {
 #ifdef _unix_
-    constexpr char platformPathSeparator = '/';
-    constexpr char foreignPathSeparator = '\\';
+    // NB(pavook): normalizing path separators can yield unexpected (or even insecure) behavior on filenames
+    // containing foreign separators, so we avoid doing it on the common unix platforms.
+    return path;
 #else
     constexpr char platformPathSeparator = '\\';
     constexpr char foreignPathSeparator = '/';
-#endif
     std::string result;
     result.reserve(path.length());
     for (int i = 0; i < std::ssize(path); ++i) {
@@ -567,6 +586,7 @@ std::string NormalizePathSeparators(const std::string& path)
         }
     }
     return result;
+#endif
 }
 
 void SetPermissions(const std::string& path, int permissions)
