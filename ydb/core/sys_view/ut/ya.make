@@ -2,6 +2,7 @@ UNITTEST_FOR(ydb/core/sys_view)
 
 FORK_SUBTESTS()
 
+REQUIREMENTS(cpu:2)
 IF (SANITIZER_TYPE OR WITH_VALGRIND)
     SIZE(LARGE)
     TAG(ya:fat)
@@ -30,6 +31,7 @@ SRCS(
     ut_counters.cpp
     ut_labeled.cpp
     ut_registry.cpp
+    ut_show_create.cpp
 )
 
 END()

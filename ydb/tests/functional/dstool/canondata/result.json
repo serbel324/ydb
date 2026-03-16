@@ -83,6 +83,20 @@
             "uri": "file://test_canonical_requests.Test.test_essential/results.txt.8"
         }
     ],
+    "test_canonical_requests.Test.test_group_resize": [
+        {
+            "uri": "file://test_canonical_requests.Test.test_group_resize/results.txt"
+        },
+        {
+            "uri": "file://test_canonical_requests.Test.test_group_resize/results.txt.0"
+        },
+        {
+            "uri": "file://test_canonical_requests.Test.test_group_resize/results.txt.1"
+        },
+        {
+            "uri": "file://test_canonical_requests.Test.test_group_resize/results.txt.2"
+        }
+    ],
     "test_canonical_requests.Test.test_group_take_snapshot": [
         {
             "uri": "file://test_canonical_requests.Test.test_group_take_snapshot/results.txt"

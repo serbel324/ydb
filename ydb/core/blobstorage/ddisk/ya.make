@@ -14,18 +14,14 @@ LIBRARY()
         direct_io_op.cpp
         persistent_buffer_space_allocator.cpp
         segment_manager.cpp
+        write_persistent_buffers_request_actor.cpp
     )
 
     PEERDIR(
         ydb/core/protos
         ydb/core/blobstorage/vdisk/common
+        ydb/library/pdisk_io
     )
-
-    IF (OS_LINUX)
-        PEERDIR(
-            ydb/library/pdisk_io
-        )
-    ENDIF()
 
 END()
 

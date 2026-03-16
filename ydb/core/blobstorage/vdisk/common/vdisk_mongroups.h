@@ -79,6 +79,8 @@ public:                                                                         
                 COUNTER_INIT(LsmCompactionWriteRequests, true);
                 COUNTER_INIT(LsmHugeBytesWritten, true);
                 COUNTER_INIT(LsmLogBytesWritten, true);
+                COUNTER_INIT(LsmCompactionWaitingTimeSeconds, false);
+                COUNTER_INIT(LsmCompactionWorkingTimeSeconds, false);
             }
 
             COUNTER_DEF(LsmCompactionBytesRead)
@@ -87,6 +89,8 @@ public:                                                                         
             COUNTER_DEF(LsmCompactionWriteRequests)
             COUNTER_DEF(LsmHugeBytesWritten)
             COUNTER_DEF(LsmLogBytesWritten)
+            COUNTER_DEF(LsmCompactionWaitingTimeSeconds)
+            COUNTER_DEF(LsmCompactionWorkingTimeSeconds)
         };
 
 
@@ -314,6 +318,10 @@ public:                                                                         
                 COUNTER_INIT_IF_EXTENDED(ReplTotalBlobsWithProblems, false);
                 COUNTER_INIT_IF_EXTENDED(ReplPhantomBlobsWithProblems, false);
                 COUNTER_INIT_IF_EXTENDED(ReplMadeNoProgress, false);
+                COUNTER_INIT_IF_EXTENDED(ReplPDiskWriteThrottledMicroseconds, false);
+                COUNTER_INIT_IF_EXTENDED(ReplNodeRequestThrottledMicroseconds, false);
+                COUNTER_INIT_IF_EXTENDED(ReplNodeResponseThrottledMicroseconds, false);
+                COUNTER_INIT_IF_EXTENDED(ReplPDiskReadThrottledMicroseconds, false);
             }
 
             COUNTER_DEF(SyncerVSyncMessagesSent);
@@ -339,6 +347,10 @@ public:                                                                         
             COUNTER_DEF(ReplTotalBlobsWithProblems);
             COUNTER_DEF(ReplPhantomBlobsWithProblems);
             COUNTER_DEF(ReplMadeNoProgress);
+            COUNTER_DEF(ReplPDiskWriteThrottledMicroseconds);
+            COUNTER_DEF(ReplNodeRequestThrottledMicroseconds);
+            COUNTER_DEF(ReplNodeResponseThrottledMicroseconds);
+            COUNTER_DEF(ReplPDiskReadThrottledMicroseconds);
         };
 
         ///////////////////////////////////////////////////////////////////////////////////
