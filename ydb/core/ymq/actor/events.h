@@ -221,6 +221,8 @@ struct TSqsEvents {
         bool Throttled = false;
 
         // Queue info
+        TString QueueName;
+        TString FolderId;
         ui32 TablesFormat = 0;
         ui64 QueueVersion = 0;
         ui64 Shards = 1;
@@ -228,6 +230,7 @@ struct TSqsEvents {
         TMaybe<TQueueAttributes> QueueAttributes;
         TMaybe<NJson::TJsonMap> QueueTags;
         TIntrusivePtr<TQuoterResourcesForActions> QuoterResources;
+        bool TopicCreated = false;
 
         // Counters
         TIntrusivePtr<::NMonitoring::TDynamicCounters> SqsCoreCounters; // Raw counters interface. Is is not prefered to use them
@@ -873,6 +876,7 @@ struct TSqsEvents {
             ui64 ShardsCount = 0;
             TInstant CreatedTimestamp;
             bool IsFifo = false;
+            bool TopicCreated = false;
 
             bool operator<(const TQueueRecord& r) const {
                 return std::tie(UserName, QueueName) < std::tie(r.UserName, r.QueueName);

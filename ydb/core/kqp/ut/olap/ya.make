@@ -16,9 +16,9 @@ SRCS(
     GLOBAL kqp_olap_ut.cpp
     aggregations_ut.cpp
     clickbench_ut.cpp
-    dictionary_ut.cpp
     locks_ut.cpp
     optimizer_ut.cpp
+    peephole_ut.cpp
     sys_view_ut.cpp
     tiering_ut.cpp
 )

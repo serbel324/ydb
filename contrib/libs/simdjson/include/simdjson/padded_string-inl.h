@@ -168,10 +168,13 @@ inline padded_string::operator padded_string_view() const noexcept simdjson_life
 }
 
 inline simdjson_result<padded_string> padded_string::load(std::string_view filename) noexcept {
+  // std::string_view is not guaranteed to be null-terminated, but std::fopen requires
+  // a null-terminated C string. Construct a temporary std::string to ensure null-termination.
+  const std::string null_terminated_filename(filename);
   // Open the file
   SIMDJSON_PUSH_DISABLE_WARNINGS
   SIMDJSON_DISABLE_DEPRECATED_WARNING // Disable CRT_SECURE warning on MSVC: manually verified this is safe
-  std::FILE *fp = std::fopen(filename.data(), "rb");
+  std::FILE *fp = std::fopen(null_terminated_filename.c_str(), "rb");
   SIMDJSON_POP_DISABLE_WARNINGS
 
   if (fp == nullptr) {
@@ -223,10 +226,13 @@ inline simdjson_result<padded_string> padded_string::load(std::string_view filen
 
 #if defined(_WIN32) && SIMDJSON_CPLUSPLUS17
 inline simdjson_result<padded_string> padded_string::load(std::wstring_view filename) noexcept {
+  // std::wstring_view is not guaranteed to be null-terminated, but _wfopen requires
+  // a null-terminated wide C string. Construct a temporary std::wstring to ensure null-termination.
+  const std::wstring null_terminated_filename(filename);
   // Open the file using the wide characters
   SIMDJSON_PUSH_DISABLE_WARNINGS
   SIMDJSON_DISABLE_DEPRECATED_WARNING // Disable CRT_SECURE warning on MSVC: manually verified this is safe
-  std::FILE *fp = _wfopen(filename.data(), L"rb");
+  std::FILE *fp = _wfopen(null_terminated_filename.c_str(), L"rb");
   SIMDJSON_POP_DISABLE_WARNINGS
 
   if (fp == nullptr) {
@@ -349,6 +355,9 @@ inline padded_string padded_string_builder::convert() noexcept {
 }
 
 inline bool padded_string_builder::reserve(size_t additional) noexcept {
+  if (simdjson_unlikely(additional + size < size)) {
+    return false; // overflow: cannot satisfy request
+  }
   size_t needed = size + additional;
   if (needed <= capacity) {
     return true;
@@ -358,8 +367,9 @@ inline bool padded_string_builder::reserve(size_t additional) noexcept {
   // repeated allocations.
   if (new_capacity < 4096) {
     new_capacity *= 2;
-  } else {
-    new_capacity += new_capacity/2; // grow by 1.5x
+    // overflow guard: ensure new_capacity + new_capacity/2 does not overflow
+  } else if (new_capacity + new_capacity / 2 > new_capacity) {
+    new_capacity += new_capacity / 2; // grow by 1.5x
   }
   char *new_data = internal::allocate_padded_buffer(new_capacity);
   if (new_data == nullptr) {
@@ -387,7 +397,7 @@ simdjson_inline padded_memory_map::padded_memory_map(const char *filename) noexc
       close(fd);
       return; // failed to get file size, data will be nullptr
     }
-    size = (size_t)st.st_size;
+    size = static_cast<size_t>(st.st_size);
     size_t total_size = size + simdjson::SIMDJSON_PADDING;
     void *anon_map =
         mmap(NULL, total_size, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -402,13 +412,13 @@ simdjson_inline padded_memory_map::padded_memory_map(const char *filename) noexc
       close(fd);
       return; // failed to mmap file, data will be nullptr
     }
-    data = (const char *)file_map;
+    data = static_cast<const char *>(file_map);
     close(fd); // no longer needed after mapping
 }
 
 simdjson_inline padded_memory_map::~padded_memory_map() noexcept {
   if (data != nullptr) {
-    munmap((void *)data, size + simdjson::SIMDJSON_PADDING);
+    munmap(const_cast<char *>(data), size + simdjson::SIMDJSON_PADDING);
   }
 }
 
