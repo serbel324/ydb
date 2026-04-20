@@ -252,7 +252,7 @@ public:
     TOpRead(TExprNode::TPtr node);
     TOpRead(const TString& alias, const TVector<TString>& columns, const TVector<TInfoUnit>& outputIUs, const NYql::EStorageType storageType,
             const TExprNode::TPtr& tableCallable, const TExprNode::TPtr& olapFilterLambda, const TExprNode::TPtr& limit, const TExprNode::TPtr& ranges,
-            const ESortDir sortDireciont, const TPhysicalOpProps& props, TPositionHandle pos);
+            const std::optional<TExpression>& originalPredicate, const ESortDir sortDireciont, const TPhysicalOpProps& props, TPositionHandle pos);
 
     virtual TVector<TInfoUnit> GetOutputIUs() override;
     virtual TString ToString(TExprContext& ctx) override;
@@ -280,6 +280,7 @@ public:
     TExprNode::TPtr OlapFilterLambda;
     TExprNode::TPtr Limit;
     TExprNode::TPtr Ranges;
+    std::optional<TExpression> OriginalPredicate;
     ESortDir SortDir{ESortDir::None};
 };
 
@@ -425,6 +426,7 @@ public:
     void RenameIUs(const THashMap<TInfoUnit, TInfoUnit, TInfoUnit::THashFunction>& renameMap, TExprContext& ctx,
                    const THashSet<TInfoUnit, TInfoUnit::THashFunction>& stopList = {}) override;
 
+    virtual void ComputeMetadata(TRBOContext& ctx, TPlanProps& planProps) override;
     virtual void ComputeStatistics(TRBOContext& ctx, TPlanProps& planProps) override;
     TExpression GetFilterExpression() const { return FilterExpr; }
 
