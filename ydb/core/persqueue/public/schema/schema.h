@@ -16,6 +16,7 @@ enum EEv : ui32 {
     EvReadResponse = InternalEventSpaceBegin(NPQ::NEvents::EServices::SCHEMA),
     EvSchemaOperationResponse,
     EvAlterTopicResponse,
+    EvCreateTopicResponse,
     EvDropTopicResponse,
     EvEnd
 };
@@ -61,6 +62,7 @@ struct TAlterTopicSettings {
     Ydb::Topic::AlterTopicRequest Request;
     TIntrusiveConstPtr<NACLib::TUserToken> UserToken;
     bool IfExists = false;
+    bool PrepareOnly = false;
     ui64 Cookie = 0;
 };
 
@@ -98,11 +100,36 @@ NActors::IActor* CreateRemoveConsumerActor(const NActors::TActorId& parentId, TR
 //
 // Create Topic
 //
+struct TCreateTopicResponse {
+    Ydb::StatusIds::StatusCode Status;
+    TString ErrorMessage;
+    NKikimrSchemeOp::TModifyScheme ModifyScheme;
+};
+
+struct TEvCreateTopicResponse: public NActors::TEventLocal<TEvCreateTopicResponse, EEv::EvCreateTopicResponse>
+                             , public TCreateTopicResponse {
+    TEvCreateTopicResponse(
+        Ydb::StatusIds::StatusCode status = Ydb::StatusIds::SUCCESS,
+        TString&& errorMessage = {},
+        NKikimrSchemeOp::TModifyScheme&& modifyScheme = {}
+    )
+        : TCreateTopicResponse(status, std::move(errorMessage), std::move(modifyScheme))
+    {
+    }
+};
+
 struct TCreateTopicSettings {
+    TString Database;
+    TString PeerName;
     Ydb::Topic::CreateTopicRequest Request;
+    TIntrusiveConstPtr<NACLib::TUserToken> UserToken;
+    bool IfNotExists = true;
+    bool PrepareOnly = false;
+    ui64 Cookie = 0;
 };
 
 NActors::IActor* CreateCreateTopicActor(const NActors::TActorId& parentId, TCreateTopicSettings&& settings);
+NActors::IActor* CreateCreateTopicActor(NThreading::TPromise<TCreateTopicResponse>&& promise, TCreateTopicSettings&& settings);
 
 //
 // Drop Topic
