@@ -189,7 +189,8 @@ namespace NKikimr::NGRpcProxy::V1 {
                 return static_cast<TDerived*>(this)->HandleCacheNavigateResponse(ev);
             }
             break;
-            case NSchemeCache::TSchemeCacheNavigate::EStatus::PathErrorUnknown: {
+            case NSchemeCache::TSchemeCacheNavigate::EStatus::PathErrorUnknown:
+            case NSchemeCache::TSchemeCacheNavigate::EStatus::AccessDenied: {
                 AddIssue(
                     FillIssue(
                         TStringBuilder() << "path '" << path << "' does not exist or you " <<
@@ -219,6 +220,16 @@ namespace NKikimr::NGRpcProxy::V1 {
                 return RespondWithCode(Ydb::StatusIds::SCHEME_ERROR);
             }
             break;
+            case NSchemeCache::TSchemeCacheNavigate::EStatus::PathNotPath: {
+                AddIssue(
+                    FillIssue(
+                        TStringBuilder() << "path '" << path << "' is not a path",
+                        Ydb::PersQueue::ErrorCode::VALIDATION_ERROR
+                    )
+                );
+                return RespondWithCode(Ydb::StatusIds::SCHEME_ERROR);
+            }
+            break;
             case NSchemeCache::TSchemeCacheNavigate::EStatus::RootUnknown: {
                 AddIssue(
                     FillIssue(
@@ -229,6 +240,16 @@ namespace NKikimr::NGRpcProxy::V1 {
                 return RespondWithCode(Ydb::StatusIds::SCHEME_ERROR);
             }
             break;
+            case NSchemeCache::TSchemeCacheNavigate::EStatus::LookupError:
+            case NSchemeCache::TSchemeCacheNavigate::EStatus::RedirectLookupError: {
+                AddIssue(
+                    FillIssue(
+                        TStringBuilder() << "could not resolve path '" << path << "'",
+                        Ydb::PersQueue::ErrorCode::ERROR
+                    )
+                );
+                return RespondWithCode(Ydb::StatusIds::UNAVAILABLE);
+            }
 
             default:
                 return RespondWithCode(Ydb::StatusIds::GENERIC_ERROR);
