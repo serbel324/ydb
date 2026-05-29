@@ -1040,11 +1040,12 @@ Y_UNIT_TEST_SUITE(TOlap) {
         auto& appData = runtime.GetAppData();
         appData.SchemeShardConfig.SetStatsBatchTimeoutMs(0);
         appData.SchemeShardConfig.SetStatsMaxBatchSize(0);
+        runtime.GetAppData().ColumnShardConfig.SetDefaultCompactionPreset("tiling");
+
         {
             auto builder = CreateImmutableSnapshotRegistryBuilder();
             auto holder = CreateImmutableSnapshotRegistryHolder();
             holder->Set(std::move(*builder).Build());
-            appData.FeatureFlags.SetEnableSnapshotsLocking(true);
             appData.SnapshotRegistryHolder = holder;
             appData.LongTxServiceConfig.SetLocalSnapshotPromotionTimeSeconds(1);
             appData.LongTxServiceConfig.SetSnapshotsExchangeIntervalSeconds(1);

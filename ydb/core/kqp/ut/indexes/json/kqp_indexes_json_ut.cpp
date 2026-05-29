@@ -1,5 +1,8 @@
 #include <ydb/core/kqp/ut/common/kqp_ut_common.h>
-#include <ydb/core/base/json_index.h>
+
+#include <ydb/library/json_index/json_index.h>
+#include <ydb/core/kqp/ut/indexes/json/kqp_json_index_corpus.h>
+#include <ydb/core/kqp/ut/indexes/json/kqp_json_index_predicate.h>
 
 #include <optional>
 
@@ -26,9 +29,10 @@ const std::string trueSuffix = std::string("\0\1", 2);
 const std::string falseSuffix = std::string("\0\0", 2);
 const std::string nullSuffix = std::string("\0\2", 2);
 
-TKikimrRunner Kikimr(bool enableJsonIndex = true) {
+TKikimrRunner Kikimr(bool enableJsonIndex = true, bool enableJsonIndexAutoSelect = false) {
     NKikimrConfig::TFeatureFlags featureFlags;
     featureFlags.SetEnableJsonIndex(enableJsonIndex);
+    featureFlags.SetEnableJsonIndexAutoSelect(enableJsonIndexAutoSelect);
     auto settings = TKikimrSettings().SetFeatureFlags(featureFlags);
     return TKikimrRunner(settings);
 }
@@ -56,7 +60,7 @@ TResultSet ReadIndex(TQueryClient& db, const char* table = "indexImplTable") {
     return result.GetResultSet(0);
 }
 
-void TestAddJsonIndex(const std::string& type, bool nullable, bool covered) {
+void TestAddJsonIndex(const std::string& type, bool nullable) {
     auto kikimr = Kikimr();
     auto db = kikimr.GetQueryClient();
 
@@ -91,89 +95,52 @@ void TestAddJsonIndex(const std::string& type, bool nullable, bool covered) {
         auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
         UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
     }
+
     {
         std::string query = R"(
             ALTER TABLE `/Root/TestTable` ADD INDEX json_idx
                 GLOBAL USING json ON (Text)
-        )" + std::string(covered ? " COVER (Data)" : "");
+        )";
 
         auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
         UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
     }
-    auto index = ReadIndex(db);
-    if (covered) {
-        CompareYson(R"([
-            [["d1"];[10u];""];
-            [["data 2"];[11u];""];
-            [["very long unit test data 3"];[12u];""];
-            [["data 4"];[13u];""];
-            [["data 5"];[14u];""];
-            [["array data 6"];[15u];""];
-            [["object data 7"];[16u];""];
-            [["data 4"];[13u];"\0\0"];
-            [["array data 6"];[15u];"\0\0"];
-            [["very long unit test data 3"];[12u];"\0\1"];
-            [["data 5"];[14u];"\0\2"];
-            [["array data 6"];[15u];"\0\3item 1"];
-            [["d1"];[10u];"\0\3literal string"];
-            [["array data 6"];[15u];"\0\4\0\0\0\0\0\200F@"];
-            [["data 2"];[11u];"\0\4\xB0rh\x91\xED|\xBF?"];
-            [["object data 7"];[16u];"\3id"];
-            [["object data 7"];[16u];"\3id\0\4\0\0\0\0@\x87\xE4@"];
-            [["object data 7"];[16u];"\6brand"];
-            [["object data 7"];[16u];"\6brand\0\3bricks"];
-            [["object data 7"];[16u];"\6parts"];
-            [["object data 7"];[16u];"\6parts\3id"];
-            [["object data 7"];[16u];"\6parts\3id\0\4\0\0\0\0\x80\xC3\xDF@"];
-            [["object data 7"];[16u];"\6parts\3id\0\4\0\0\0\0\xC0\xC2\xDF@"];
-            [["object data 7"];[16u];"\6parts\5name"];
-            [["object data 7"];[16u];"\6parts\5name\0\0031x3"];
-            [["object data 7"];[16u];"\6parts\5name\0\0033x5"];
-            [["object data 7"];[16u];"\6parts\6count"];
-            [["object data 7"];[16u];"\6parts\6count\0\4\0\0\0\0\0\0\x1C@"];
-            [["object data 7"];[16u];"\6parts\6count\0\4\0\0\0\0\0\0001@"];
-            [["object data 7"];[16u];"\6price"];
-            [["object data 7"];[16u];"\6price\0\2"];
-            [["object data 7"];[16u];"\x0bpart_count"];
-            [["object data 7"];[16u];"\x0bpart_count\0\4\0\0\0\0\0\xE4\x95@"]
-        ])", FormatResultSetYson(index));
-    } else {
-        CompareYson(R"([
-            [[10u];""];
-            [[11u];""];
-            [[12u];""];
-            [[13u];""];
-            [[14u];""];
-            [[15u];""];
-            [[16u];""];
-            [[13u];"\0\0"];
-            [[15u];"\0\0"];
-            [[12u];"\0\1"];
-            [[14u];"\0\2"];
-            [[15u];"\0\3item 1"];
-            [[10u];"\0\3literal string"];
-            [[15u];"\0\4\0\0\0\0\0\200F@"];
-            [[11u];"\0\4\xB0rh\x91\xED|\xBF?"];
-            [[16u];"\3id"];
-            [[16u];"\3id\0\4\0\0\0\0@\x87\xE4@"];
-            [[16u];"\6brand"];
-            [[16u];"\6brand\0\3bricks"];
-            [[16u];"\6parts"];
-            [[16u];"\6parts\3id"];
-            [[16u];"\6parts\3id\0\4\0\0\0\0\x80\xC3\xDF@"];
-            [[16u];"\6parts\3id\0\4\0\0\0\0\xC0\xC2\xDF@"];
-            [[16u];"\6parts\5name"];
-            [[16u];"\6parts\5name\0\0031x3"];
-            [[16u];"\6parts\5name\0\0033x5"];
-            [[16u];"\6parts\6count"];
-            [[16u];"\6parts\6count\0\4\0\0\0\0\0\0\x1C@"];
-            [[16u];"\6parts\6count\0\4\0\0\0\0\0\0001@"];
-            [[16u];"\6price"];
-            [[16u];"\6price\0\2"];
-            [[16u];"\x0bpart_count"];
-            [[16u];"\x0bpart_count\0\4\0\0\0\0\0\xE4\x95@"]
-        ])", FormatResultSetYson(index));
-    }
+
+    CompareYson(R"([
+        [[10u];""];
+        [[11u];""];
+        [[12u];""];
+        [[13u];""];
+        [[14u];""];
+        [[15u];""];
+        [[16u];""];
+        [[13u];"\0\0"];
+        [[15u];"\0\0"];
+        [[12u];"\0\1"];
+        [[14u];"\0\2"];
+        [[15u];"\0\3item 1"];
+        [[10u];"\0\3literal string"];
+        [[15u];"\0\4\0\0\0\0\0\200F@"];
+        [[11u];"\0\4\xB0rh\x91\xED|\xBF?"];
+        [[16u];"\3id"];
+        [[16u];"\3id\0\4\0\0\0\0@\x87\xE4@"];
+        [[16u];"\6brand"];
+        [[16u];"\6brand\0\3bricks"];
+        [[16u];"\6parts"];
+        [[16u];"\6parts\3id"];
+        [[16u];"\6parts\3id\0\4\0\0\0\0\x80\xC3\xDF@"];
+        [[16u];"\6parts\3id\0\4\0\0\0\0\xC0\xC2\xDF@"];
+        [[16u];"\6parts\5name"];
+        [[16u];"\6parts\5name\0\0031x3"];
+        [[16u];"\6parts\5name\0\0033x5"];
+        [[16u];"\6parts\6count"];
+        [[16u];"\6parts\6count\0\4\0\0\0\0\0\0\x1C@"];
+        [[16u];"\6parts\6count\0\4\0\0\0\0\0\0001@"];
+        [[16u];"\6price"];
+        [[16u];"\6price\0\2"];
+        [[16u];"\x0bpart_count"];
+        [[16u];"\x0bpart_count\0\4\0\0\0\0\0\xE4\x95@"]
+    ])", FormatResultSetYson(ReadIndex(db)));
 }
 
 void FillTestTable(TQueryClient& db, const std::string& tableName, const std::string& jsonType) {
@@ -230,17 +197,17 @@ void FillTestTable(TQueryClient& db, const std::string& tableName, const std::st
     UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
 }
 
-void ValidatePredicate(TQueryClient& db, const std::string& predicate, TParams params = TParamsBuilder().Build()) {
+void ValidatePredicate(TQueryClient& db, const std::string& predicate, TParams params = TParamsBuilder().Build(), const std::string& suffix = "ORDER BY Key") {
     static constexpr const char* table = "TestTable";
     static constexpr const char* indexTable = "json_idx";
 
     auto query = [&](const std::string& indexPart, const std::string& pred) {
         return std::format(R"(
-            SELECT Key, Text FROM {} {} WHERE {} ORDER BY Key;
-        )", table, (indexPart.empty() ? "" : "VIEW  " + indexPart), pred);
+            SELECT Key, Text FROM {} VIEW {} WHERE {} {};
+        )", table, indexPart, pred, suffix);
     };
 
-    auto mainResult = db.ExecuteQuery(query("", predicate), TTxControl::NoTx(), params).ExtractValueSync();
+    auto mainResult = db.ExecuteQuery(query("PRIMARY KEY", predicate), TTxControl::NoTx(), params).ExtractValueSync();
     UNIT_ASSERT_C(mainResult.IsSuccess(), mainResult.GetIssues().ToString());
 
     auto indexResult = db.ExecuteQuery(query(indexTable, predicate), TTxControl::NoTx(), params).ExtractValueSync();
@@ -253,14 +220,16 @@ void ValidatePredicate(TQueryClient& db, const std::string& predicate, TParams p
     CompareYson(FormatResultSetYson(mainResult.GetResultSet(0)), FormatResultSetYson(indexResult.GetResultSet(0)));
 }
 
-void ValidateError(TQueryClient& db, const std::string& predicate, const std::string& errorMessage = "Failed to extract search terms from predicate") {
+void ValidateError(TQueryClient& db, const std::string& predicate,
+    const std::string& errorMessage = "Failed to extract jsonpath tokens from the predicate")
+{
     static constexpr const char* table = "TestTable";
     static constexpr const char* indexTable = "json_idx";
 
     auto query = [&](const std::string& indexPart, const std::string& pred) {
         return std::format(R"(
-            SELECT * FROM {} {} WHERE {} ORDER BY Key;
-        )", table, (indexPart.empty() ? "" : "VIEW  " + indexPart), pred);
+            SELECT * FROM {} VIEW {} WHERE {} ORDER BY Key;
+        )", table, indexPart, pred);
     };
 
     auto result = db.ExecuteQuery(query(indexTable, predicate), TTxControl::NoTx()).ExtractValueSync();
@@ -269,14 +238,15 @@ void ValidateError(TQueryClient& db, const std::string& predicate, const std::st
 }
 
 void ValidateError(TQueryClient& db, const std::string& predicate, TParams params,
-    const std::string& errorMessage = "Failed to extract search terms from predicate") {
+    const std::string& errorMessage = "Failed to extract jsonpath tokens from the predicate")
+{
     static constexpr const char* table = "TestTable";
     static constexpr const char* indexTable = "json_idx";
 
     auto query = [&](const std::string& indexPart, const std::string& pred) {
         return std::format(R"(
-            SELECT * FROM {} {} WHERE {} ORDER BY Key;
-        )", table, (indexPart.empty() ? "" : "VIEW  " + indexPart), pred);
+            SELECT * FROM {} VIEW {} WHERE {} ORDER BY Key;
+        )", table, indexPart, pred);
     };
 
     auto result = db.ExecuteQuery(query(indexTable, predicate), TTxControl::NoTx(), params).ExtractValueSync();
@@ -285,9 +255,10 @@ void ValidateError(TQueryClient& db, const std::string& predicate, TParams param
 }
 
 void TestSelectJsonWithIndex(const std::string& jsonType, const std::optional<bool>& jsonExistsStrict,
-    const std::function<void(TQueryClient&, const std::function<std::string(const std::string&)>&)>& body)
+    const std::function<void(TQueryClient&, const std::function<std::string(const std::string&)>&)>& body,
+    bool enableJsonIndexAutoSelect = false)
 {
-    auto kikimr = Kikimr();
+    auto kikimr = Kikimr(/* enableJsonIndex */ true, enableJsonIndexAutoSelect);
     auto db = kikimr.GetQueryClient();
 
     kikimr.GetTestServer().GetRuntime()->SetLogPriority(NKikimrServices::BUILD_INDEX, NActors::NLog::PRI_TRACE);
@@ -315,6 +286,13 @@ void TestSelectJsonWithIndex(const std::string& jsonType, const std::optional<bo
     }
 
     body(db, jsonExists);
+}
+
+void FillDataColumn(TQueryClient& db) {
+    auto result = db.ExecuteQuery(
+        R"(UPDATE TestTable SET Data = "row_"u || CAST(Key AS Utf8) WHERE Key > 0;)",
+        TTxControl::NoTx()).ExtractValueSync();
+    UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
 }
 
 void ValidateTokens(TQueryClient& db, const std::string& predicate,
@@ -394,51 +372,218 @@ TExecuteQueryResult WriteJsonIndexWithKeys(TQueryClient& db, const std::string& 
     return db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
 }
 
+void ValidateAutoSelect(TQueryClient& db, const std::string& predicate,
+    const TString& indexName = "json_idx", const std::string& tableName = "TestTable")
+{
+    const auto settings = TExecuteQuerySettings().ExecMode(EExecMode::Explain);
+    const auto query = std::format("SELECT * FROM {} WHERE {};", tableName, predicate);
+
+    const auto result = db.ExecuteQuery(query, TTxControl::NoTx(), settings).ExtractValueSync();
+    UNIT_ASSERT_C(result.IsSuccess(), "Predicate: " + predicate + ", error: " + result.GetIssues().ToString());
+    UNIT_ASSERT_C(result.GetStats(), "Stats are empty for: " + predicate);
+
+    const auto plan = result.GetStats()->GetPlan();
+    UNIT_ASSERT_C(plan, "Plan is empty for: " + predicate);
+
+    NJson::TJsonValue planJson;
+    UNIT_ASSERT_C(NJson::ReadJsonTree(*plan, &planJson, true), "Failed to parse plan JSON");
+    UNIT_ASSERT_C(CountPlanNodesByKv(planJson, "Index", indexName) == 1, indexName + " was not autoselected for: " + predicate);
+}
+
+void ValidateNoAutoSelect(TQueryClient& db, const std::string& predicate,
+    const TString& indexName = "json_idx", const std::string& tableName = "TestTable")
+{
+    const auto settings = TExecuteQuerySettings().ExecMode(EExecMode::Explain);
+    const auto query = std::format("SELECT * FROM {} WHERE {};", tableName, predicate);
+    const auto result = db.ExecuteQuery(query, TTxControl::NoTx(), settings).ExtractValueSync();
+    UNIT_ASSERT_C(result.IsSuccess(), "Predicate: " + predicate + ", error: " + result.GetIssues().ToString());
+    UNIT_ASSERT_C(result.GetStats(), "Stats are empty");
+
+    const auto plan = result.GetStats()->GetPlan();
+    UNIT_ASSERT_C(plan, "Plan is empty");
+
+    NJson::TJsonValue planJson;
+    UNIT_ASSERT_C(NJson::ReadJsonTree(*plan, &planJson, true), "Failed to parse plan JSON");
+    UNIT_ASSERT_C(CountPlanNodesByKv(planJson, "Index", indexName) == 0, indexName + " was autoselected for: " + predicate);
+}
+
+void TestJsonIndexAlterTableWithIntegerPk(const std::string& pkType) {
+    auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+    auto db = kikimr.GetQueryClient();
+
+    kikimr.GetTestServer().GetRuntime()->SetLogPriority(NKikimrServices::BUILD_INDEX, NActors::NLog::PRI_TRACE);
+    kikimr.GetTestServer().GetRuntime()->SetLogPriority(NKikimrServices::FLAT_TX_SCHEMESHARD, NActors::NLog::PRI_TRACE);
+
+    {
+        const auto query = std::format(R"(
+            CREATE TABLE TestTable (
+                Key {},
+                Text Json,
+                Data Utf8,
+                PRIMARY KEY (Key)
+            );
+        )", pkType);
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+    }
+
+    {
+        const auto query = R"(
+            UPSERT INTO TestTable (Key, Text, Data) VALUES
+                (1, Json('{"k1": 1}'), "d1"),
+                (2, Json('{"k1": 2}'), "d2"),
+                (3, Json('{"k2": 3}'), "d3"),
+                (4, Json('{"k1": 10}'), "d4"),
+                (5, Json('{}'), "d5");
+        )";
+
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+    }
+
+    {
+        const auto query = R"(
+            ALTER TABLE TestTable ADD INDEX json_idx GLOBAL USING json ON (Text)
+        )";
+
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+    }
+
+    {
+        const auto query = std::format(R"(
+            UPSERT INTO TestTable (Key, Text, Data) VALUES
+                (6, '{{"k1": 6}}', "d6"),
+                (2, '{{"k1": 99}}', "d2_updated");
+        )");
+
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+    }
+
+    ValidatePredicate(db, R"(JSON_EXISTS(Text, '$.k1'))");
+    ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 10)");
+    ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 99)");
+
+    ValidateAutoSelect(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 10)");
+    ValidateAutoSelect(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 99)");
+    ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') LIMIT 2)");
+
+    {
+        const auto query = std::format(R"(
+            SELECT Key, Data FROM TestTable VIEW json_idx
+            WHERE JSON_VALUE(Text, '$.k1' RETURNING Int64) == 10
+            ORDER BY Key;
+        )");
+
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 1);
+    }
+
+    ValidateNoAutoSelect(db, std::format("Key = {} AND JSON_EXISTS(Text, '$.k1')", 1));
+    ValidateNoAutoSelect(db, std::format("JSON_EXISTS(Text, '$.k1') AND Key = {}", 1));
+    ValidateNoAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') OR Data = 'd5')");
+    ValidateNoAutoSelect(db, "Data = 'd3'");
+
+    {
+        const auto query = std::format(R"(
+            SELECT Key FROM TestTable VIEW json_idx
+            WHERE JSON_EXISTS(Text, '$.k2')
+            ORDER BY Key;
+        )");
+
+        auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+        UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 1);
+    }
+}
+
 }  // namespace
 
 Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
     Y_UNIT_TEST(AddJsonIndexJson) {
-        TestAddJsonIndex("Json", true, false);
+        TestAddJsonIndex("Json", true);
     }
 
     Y_UNIT_TEST(AddJsonIndexJsonDocument) {
-        TestAddJsonIndex("JsonDocument", true, false);
+        TestAddJsonIndex("JsonDocument", true);
     }
 
     Y_UNIT_TEST(AddJsonIndexJsonNotNull) {
-        TestAddJsonIndex("Json", false, false);
+        TestAddJsonIndex("Json", false);
     }
 
     Y_UNIT_TEST(AddJsonIndexJsonDocumentNotNull) {
-        TestAddJsonIndex("JsonDocument", false, false);
+        TestAddJsonIndex("JsonDocument", false);
     }
 
-    Y_UNIT_TEST(AddJsonIndexCoveringJson) {
-        TestAddJsonIndex("Json", true, true);
-    }
-
-    Y_UNIT_TEST(AddJsonIndexCoveringJsonDocument) {
-        TestAddJsonIndex("JsonDocument", true, true);
-    }
-
-    Y_UNIT_TEST(AddJsonIndexCoveringJsonNotNull) {
-        TestAddJsonIndex("Json", false, true);
-    }
-
-    Y_UNIT_TEST(AddJsonIndexCoveringJsonDocumentNotNull) {
-        TestAddJsonIndex("JsonDocument", false, true);
-    }
-
-    Y_UNIT_TEST(OnCreate) {
+    Y_UNIT_TEST(CoverColumnsNotAllowed) {
         auto kikimr = Kikimr();
         auto db = kikimr.GetQueryClient();
 
-        kikimr.GetTestServer().GetRuntime()->SetLogPriority(NKikimrServices::BUILD_INDEX, NActors::NLog::PRI_TRACE);
-        kikimr.GetTestServer().GetRuntime()->SetLogPriority(NKikimrServices::FLAT_TX_SCHEMESHARD, NActors::NLog::PRI_TRACE);
+        {
+            const std::string query = R"(
+                CREATE TABLE TestTable (
+                    Key Uint64,
+                    Text Json,
+                    Data Utf8,
+                    PRIMARY KEY (Key),
+                    INDEX json_idx GLOBAL USING json ON (Text) COVER (Data)
+                );
+            )";
 
-        CreateTestTable(db, "Json", true);
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_VALUES_EQUAL_C(result.GetStatus(), EStatus::BAD_REQUEST, result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index does not support COVER columns");
+        }
 
-        // TODO: Test it with update after implementing update
+        CreateTestTable(db, "Json");
+
+        {
+            const std::string query = R"(
+                ALTER TABLE TestTable ADD INDEX json_idx
+                    GLOBAL USING json ON (Text) COVER (Data)
+            )";
+
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_VALUES_EQUAL_C(result.GetStatus(), EStatus::BAD_REQUEST, result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index does not support COVER columns");
+        }
+
+        {
+            auto tableClient = kikimr.GetTableClient();
+            auto session = tableClient.GetSession().GetValueSync().GetSession();
+
+            auto desc = NYdb::NTable::TTableBuilder()
+                .AddNullableColumn("Key", NYdb::EPrimitiveType::Uint64)
+                .AddNullableColumn("Text", NYdb::EPrimitiveType::Json)
+                .AddNullableColumn("Data", NYdb::EPrimitiveType::Utf8)
+                .SetPrimaryKeyColumn("Key")
+                .AddSecondaryIndex("json_idx", NYdb::NTable::EIndexType::GlobalJson, {"Text"}, {"Data"})
+                .Build();
+
+            auto result = session.CreateTable("/Root/TestTableSdkCover", std::move(desc)).ExtractValueSync();
+            UNIT_ASSERT_VALUES_EQUAL_C(result.GetStatus(), EStatus::BAD_REQUEST, result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index does not support COVER columns");
+        }
+
+        {
+            auto tableClient = kikimr.GetTableClient();
+            auto session = tableClient.GetSession().GetValueSync().GetSession();
+
+            NYdb::NTable::TAlterTableSettings alterSettings;
+            alterSettings.AppendAddIndexes(NYdb::NTable::TIndexDescription(
+                "json_idx_sdk",
+                NYdb::NTable::EIndexType::GlobalJson,
+                {"Text"},
+                {"Data"}
+            ));
+
+            auto result = session.AlterTable("/Root/TestTable", alterSettings).ExtractValueSync();
+            UNIT_ASSERT_VALUES_EQUAL_C(result.GetStatus(), EStatus::BAD_REQUEST, result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index does not support COVER columns");
+        }
     }
 
     Y_UNIT_TEST(UnsupportedType) {
@@ -486,11 +631,11 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
             )";
             auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
             UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
-            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index supports only 1 key column, but 2 are requested");
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index requires exactly one key column, but 2 are requested");
         }
     }
 
-    Y_UNIT_TEST(NonUint64Pk) {
+    Y_UNIT_TEST(NonIntegerPk) {
         auto kikimr = Kikimr();
         auto db = kikimr.GetQueryClient();
 
@@ -500,7 +645,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
         {
             std::string query = R"(
                 CREATE TABLE `/Root/TestTable` (
-                    Key Uint32,
+                    Key Utf8,
                     Field1 Json,
                     PRIMARY KEY (Key)
                 );
@@ -515,8 +660,25 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
             )";
             auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
             UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
-            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "Error: JSON index requires primary key column 'Key' to be of type 'Uint64' but got Uint32");
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(),
+                "Error: JSON index requires primary key column 'Key' to be of type 'Uint64', 'Int64', 'Uint32' or 'Int32' but got Utf8");
         }
+    }
+
+    Y_UNIT_TEST(AlterTableJsonIndex_PK_Int32) {
+        TestJsonIndexAlterTableWithIntegerPk("Int32");
+    }
+
+    Y_UNIT_TEST(AlterTableJsonIndex_PK_Uint32) {
+        TestJsonIndexAlterTableWithIntegerPk("Uint32");
+    }
+
+    Y_UNIT_TEST(AlterTableJsonIndex_PK_Int64) {
+        TestJsonIndexAlterTableWithIntegerPk("Int64");
+    }
+
+    Y_UNIT_TEST(AlterTableJsonIndex_PK_Uint64) {
+        TestJsonIndexAlterTableWithIntegerPk("Uint64");
     }
 
     Y_UNIT_TEST(NoCompositePk) {
@@ -545,7 +707,8 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
             )";
             auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
             UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
-            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "Error: JSON index requires exactly one primary key column of type 'Uint64', but table has 2 primary key columns");
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(),
+                "Error: JSON index requires exactly one primary key column of type 'Uint64', 'Int64', 'Uint32' or 'Int32', but table has 2 primary key columns");
         }
     }
 
@@ -562,6 +725,23 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
             auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
             UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
         }
+
+        {
+            auto tableClient = kikimr.GetTableClient();
+            auto session = tableClient.GetSession().GetValueSync().GetSession();
+
+            NYdb::NTable::TAlterTableSettings alterSettings;
+            alterSettings.AppendAddIndexes(NYdb::NTable::TIndexDescription(
+                "json_idx_sdk",
+                NYdb::NTable::EIndexType::GlobalJson,
+                {"Text"},
+                {"Data"}
+            ));
+
+            auto result = session.AlterTable("/Root/TestTable", alterSettings).ExtractValueSync();
+            UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index support is disabled");
+        }
     }
 
     Y_UNIT_TEST(DisabledFlagRejectCreate) {
@@ -577,6 +757,72 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
                     PRIMARY KEY (Key),
                     INDEX `json_idx` GLOBAL USING json ON (Text)
                 );
+            )";
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        {
+            auto tableClient = kikimr.GetTableClient();
+            auto session = tableClient.GetSession().GetValueSync().GetSession();
+
+            auto desc = NYdb::NTable::TTableBuilder()
+                .AddNullableColumn("Key", NYdb::EPrimitiveType::Uint64)
+                .AddNullableColumn("Text", NYdb::EPrimitiveType::Json)
+                .AddNullableColumn("Data", NYdb::EPrimitiveType::Utf8)
+                .SetPrimaryKeyColumn("Key")
+                .AddSecondaryIndex("json_idx", NYdb::NTable::EIndexType::GlobalJson, {"Text"}, {"Data"})
+                .Build();
+
+            auto result = session.CreateTable("/Root/TestTable", std::move(desc)).ExtractValueSync();
+            UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
+            UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(), "JSON index support is disabled");
+        }
+    }
+
+    Y_UNIT_TEST(CreateOlap) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true);
+        auto db = kikimr.GetQueryClient();
+
+        {
+            std::string query = R"(
+                CREATE TABLE `/Root/TestTable` (
+                    Key Uint64 NOT NULL,
+                    Text Json,
+                    Data Utf8,
+                    PRIMARY KEY (Key),
+                    INDEX `json_idx` GLOBAL USING json ON (Text)
+                ) WITH (
+                    STORE = COLUMN
+                );
+            )";
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
+        }
+    }
+
+    Y_UNIT_TEST(AlterOlap) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true);
+        auto db = kikimr.GetQueryClient();
+
+        {
+            std::string query = R"(
+                CREATE TABLE `/Root/TestTable` (
+                    Key Uint64 NOT NULL,
+                    Text Json,
+                    Data Utf8,
+                    PRIMARY KEY (Key),
+                ) WITH (
+                    STORE = COLUMN
+                );
+            )";
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        {
+            std::string query = R"(
+                ALTER TABLE `/Root/TestTable` ADD INDEX json_idx GLOBAL USING json ON (Text)
             )";
             auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
             UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
@@ -1794,9 +2040,338 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexes) {
             ValidatePredicate(db, jsonExists("$.k1.k2.k4[*] ? (@ != null && @ > 0)"));
         });
     }
+
+    Y_UNIT_TEST_TWIN(SelectJsonValue_RequiresReturning, IsJsonDocument) {
+        TestSelectJsonWithIndex(IsJsonDocument ? "JsonDocument" : "Json", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Main table scan works fine without RETURNING
+            {
+                auto result = db.ExecuteQuery(
+                    R"(SELECT Key FROM TestTable VIEW PRIMARY KEY WHERE JSON_VALUE(Text, '$.k1') == "1"u ORDER BY Key;)",
+                    TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+            }
+
+            // Index query without RETURNING fails at compile time
+            {
+                auto result = db.ExecuteQuery(
+                    R"(SELECT Key FROM TestTable VIEW json_idx WHERE JSON_VALUE(Text, '$.k1') == "1"u ORDER BY Key;)",
+                    TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(!result.IsSuccess(), result.GetIssues().ToString());
+                UNIT_ASSERT_STRING_CONTAINS(result.GetIssues().ToString(),
+                    "RETURNING clause is required for JSON_VALUE in JSON index predicates");
+            }
+
+            // With RETURNING: index and main table return the same results
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "1"u)");
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 1l)");
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN ("1"u, "v"u))");
+        });
+    }
+
+    Y_UNIT_TEST_TWIN(SelectJsonValue_InListParam, IsJsonDocument) {
+        TestSelectJsonWithIndex(IsJsonDocument ? "JsonDocument" : "Json", std::nullopt, [](TQueryClient& db, const auto&) {
+            // JV IN $p
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN $p)",
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("1")
+                    .AddListItem().Utf8("v")
+                    .EndList().Build().Build());
+            // JV IN ($p1, $p2)
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN ($p1, $p2))",
+                TParamsBuilder()
+                    .AddParam("$p1").Utf8("1").Build()
+                    .AddParam("$p2").Utf8("v").Build()
+                    .Build());
+            // JV IN (l1, l2)
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN ("1"u, "v"u))");
+
+            // Integer
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN $p)",
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Int64(1)
+                    .AddListItem().Int64(0)
+                    .EndList().Build().Build());
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN ($p1, $p2))",
+                TParamsBuilder()
+                    .AddParam("$p1").Int64(1).Build()
+                    .AddParam("$p2").Int64(0).Build()
+                    .Build());
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN (1l, 0l))");
+
+            // Finished path
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$.k1.type()' RETURNING Utf8) IN $p)",
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("string")
+                    .AddListItem().Utf8("number")
+                    .EndList().Build().Build());
+        });
+    }
+
+    Y_UNIT_TEST(SelectJsonIndex_Top) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            static constexpr const char* where = R"(JSON_EXISTS(Text, '$.k1'))";
+            auto empty = TParamsBuilder().Build();
+
+            FillDataColumn(db);
+
+            ValidatePredicate(db, where, empty, "LIMIT 0");
+            ValidatePredicate(db, where, empty, "LIMIT 1");
+            ValidatePredicate(db, where, empty, "LIMIT 2");
+            ValidatePredicate(db, where, empty, "LIMIT 10");
+            ValidatePredicate(db, where, empty, "LIMIT 100000");
+            ValidatePredicate(db, where, empty, "LIMIT -1");
+
+            ValidatePredicate(db, where, empty, "LIMIT 0 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT 1 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT 2 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT 3 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT 10 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT 100000 OFFSET 5");
+            ValidatePredicate(db, where, empty, "LIMIT -1 OFFSET 5");
+
+            {
+                ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') LIMIT 5)");
+
+                const std::string query = R"(
+                    SELECT Key FROM TestTable WHERE JSON_EXISTS(Text, '$.k1') LIMIT 5;
+                )";
+
+                auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+                UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 5);
+            }
+
+            {
+                ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') LIMIT 5 OFFSET 3)");
+
+                const std::string query = R"(
+                    SELECT Key FROM TestTable WHERE JSON_EXISTS(Text, '$.k1') LIMIT 5 OFFSET 3;
+                )";
+
+                auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+                UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 5);
+            }
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(SelectJsonIndex_TopSort) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            static constexpr const char* where = R"(JSON_EXISTS(Text, '$.k1'))";
+            auto empty = TParamsBuilder().Build();
+
+            FillDataColumn(db);
+
+            ValidatePredicate(db, where, empty, "ORDER BY Data ASC");
+            ValidatePredicate(db, where, empty, "ORDER BY Data DESC");
+            ValidatePredicate(db, where, empty, "ORDER BY Data ASC LIMIT 5");
+            ValidatePredicate(db, where, empty, "ORDER BY Data DESC LIMIT 5");
+            ValidatePredicate(db, where, empty, "ORDER BY Data ASC LIMIT 5 OFFSET 3");
+            ValidatePredicate(db, where, empty, "ORDER BY Data DESC LIMIT 5 OFFSET 3");
+
+            ValidatePredicate(db, where, empty, "ORDER BY Key ASC");
+            ValidatePredicate(db, where, empty, "ORDER BY Key DESC");
+            ValidatePredicate(db, where, empty, "ORDER BY Key ASC LIMIT 5");
+            ValidatePredicate(db, where, empty, "ORDER BY Key DESC LIMIT 5");
+            ValidatePredicate(db, where, empty, "ORDER BY Key ASC LIMIT 5 OFFSET 3");
+            ValidatePredicate(db, where, empty, "ORDER BY Key DESC LIMIT 5 OFFSET 3");
+
+            {
+                ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') ORDER BY Data LIMIT 5)");
+
+                const std::string query = R"(
+                    SELECT Key FROM TestTable WHERE JSON_EXISTS(Text, '$.k1') ORDER BY Data LIMIT 5;
+                )";
+
+                auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+                UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 5);
+            }
+
+            {
+                ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') ORDER BY Data LIMIT 5 OFFSET 3)");
+
+                const std::string query = R"(
+                    SELECT Key FROM TestTable WHERE JSON_EXISTS(Text, '$.k1') ORDER BY Data LIMIT 5 OFFSET 3;
+                )";
+
+                auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+                UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 5);
+            }
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(TruncateTable) {
+        NKikimrConfig::TFeatureFlags featureFlags;
+        featureFlags.SetEnableJsonIndex(true);
+        featureFlags.SetEnableTruncateTable(true);
+
+        auto kikimr = TKikimrRunner(TKikimrSettings().SetFeatureFlags(featureFlags));
+        auto db = kikimr.GetQueryClient();
+
+        CreateTestTable(db, "Json", /* withIndex */ true);
+
+        auto upsertData = [&]() {
+            const TString query = R"(
+                UPSERT INTO `/Root/TestTable` (Key, Text, Data) VALUES
+                    (1, '{"a":1}', "data1"),
+                    (2, '{"b":"hello"}', "data2"),
+                    (3, '"scalar"', "data3");
+            )";
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        };
+
+        auto ensureMainTableEmpty = [&]() {
+            auto result = db.ExecuteQuery("SELECT * FROM `/Root/TestTable`;", TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+            UNIT_ASSERT_VALUES_EQUAL(result.GetResultSet(0).RowsCount(), 0);
+        };
+
+        auto ensureIndexEmpty = [&]() {
+            auto index = ReadIndex(db);
+            UNIT_ASSERT_VALUES_EQUAL(index.RowsCount(), 0);
+        };
+
+        auto ensureIndexNonEmpty = [&]() {
+            auto index = ReadIndex(db);
+            UNIT_ASSERT_GT(index.RowsCount(), 0);
+        };
+
+        upsertData();
+        ensureIndexNonEmpty();
+
+        for (size_t i = 0; i < 3; ++i) {
+            auto result = db.ExecuteQuery("TRUNCATE TABLE `/Root/TestTable`;", TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+
+            ensureMainTableEmpty();
+            ensureIndexEmpty();
+
+            upsertData();
+            ensureIndexNonEmpty();
+        }
+    }
+
+    Y_UNIT_TEST(ShowCreateTable) {
+        NKikimrConfig::TFeatureFlags featureFlags;
+        featureFlags.SetEnableJsonIndex(true);
+
+        auto kikimr = TKikimrRunner(TKikimrSettings()
+            .SetFeatureFlags(featureFlags)
+            .SetEnableShowCreate(true));
+
+        auto db = kikimr.GetQueryClient();
+        auto session = db.GetSession().GetValueSync().GetSession();
+
+        {
+            auto result = session.ExecuteQuery(R"(
+                CREATE TABLE `/Root/TestTable` (
+                    Key Uint64,
+                    Text Json,
+                    Data JsonDocument,
+                    PRIMARY KEY (Key),
+                    INDEX json_idx GLOBAL USING json ON (Text)
+                );
+            )", TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        {
+            auto result = session.ExecuteQuery(R"(
+                ALTER TABLE `/Root/TestTable` ADD INDEX json_idx_2 GLOBAL USING json ON (Data);
+            )", TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        {
+            auto result = session.ExecuteQuery(R"(
+                SHOW CREATE TABLE `/Root/TestTable`;
+            )", TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+            UNIT_ASSERT(!result.GetResultSets().empty());
+
+            auto yson = FormatResultSetYson(result.GetResultSet(0));
+            UNIT_ASSERT_STRING_CONTAINS_C(yson, "INDEX `json_idx` GLOBAL USING json ON (`Text`)", yson);
+            UNIT_ASSERT_STRING_CONTAINS_C(yson, "INDEX `json_idx_2` GLOBAL USING json ON (`Data`)", yson);
+        }
+    }
+
+    Y_UNIT_TEST_TWIN(CyrillicIndexImplTable, IsJsonDocument) {
+        const auto jsonType = IsJsonDocument ? "JsonDocument" : "Json";
+
+        auto kikimr = Kikimr();
+        auto db = kikimr.GetQueryClient();
+
+        CreateTestTable(db, jsonType);
+
+        {
+            const auto query = std::format(R"(
+                UPSERT INTO TestTable (Key, Text) VALUES (1, {0}({1}));
+            )", jsonType, R"('{"ключ": "я mop"}')");
+
+            const auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        {
+            const auto query = R"(
+                ALTER TABLE TestTable ADD INDEX json_idx GLOBAL USING json ON (Text);
+            )";
+
+            const auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        CompareYson(R"([
+            [[1u];""];
+            [[1u];"\x09ключ"];
+            [[1u];"\x09ключ\0\3я mop"]
+        ])", FormatResultSetYson(ReadIndex(db)));
+    }
+
+    Y_UNIT_TEST_TWIN(CyrillicPredicates, IsJsonDocument) {
+        const std::string jsonType = IsJsonDocument ? "JsonDocument" : "Json";
+
+        TestSelectJsonWithIndex(jsonType, std::nullopt, [&](TQueryClient& db, const auto&) {
+            {
+                const auto query = std::format(R"(
+                    UPSERT INTO TestTable (Key, Text) VALUES
+                        (100, {0}({1})),
+                        (101, {0}({2})),
+                        (102, {0}({3})),
+                        (103, {0}({4}));
+                )", jsonType, R"('{"ключ": "Я моп"}')", R"('{"другой ключ": "в стойло!"}')", R"('{"ключ": "Я empty"}')", "'{}'");
+
+                auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+                UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+            }
+
+            // JE: Cyrillic key in jsonpath
+            ValidatePredicate(db, R"(JSON_EXISTS(Text, '$."ключ"'))");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$."ключ"'))", {"\x09ключ"});
+
+            // JE: Cyrillic key with Cyrillic string value in equality filter
+            ValidatePredicate(db, R"(JSON_EXISTS(Text, '$ ? (@."ключ" == "Я моп")'))");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$ ? (@."ключ" == "Я моп")'))", {std::string("\x09ключ") + strSuffix("Я моп")});
+
+            ValidatePredicate(db, R"(JSON_EXISTS(Text, '$ ? (@."ключ" starts with "Я")'))");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$ ? (@."ключ" starts with "Я")'))", {"\x09ключ"});
+
+            // JV: Cyrillic key compared to Cyrillic Utf8 literal
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$."ключ"' RETURNING Utf8) == "Я моп"u)");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$."ключ"' RETURNING Utf8) == "Я моп"u)", {std::string("\x09ключ") + strSuffix("Я моп")});
+
+            // JV: Cyrillic key compared to external Utf8 parameter
+            auto cyrParam = TParamsBuilder().AddParam("$p").Utf8("я").Build().Build();
+            ValidatePredicate(db, R"(JSON_VALUE(Text, '$."ключ"' RETURNING Utf8) == $p)", cyrParam);
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$."ключ"' RETURNING Utf8) == $p)", {NJsonIndex::TToken{"\x09ключ", "$p"}}, cyrParam);
+        });
+    }
 }
 
-Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
+Y_UNIT_TEST_SUITE(KqpJsonIndexesTokens) {
     Y_UNIT_TEST(JsonExists) {
         TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
             // Basic path exists cases
@@ -2122,7 +2697,6 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
         });
     }
 
-    // JSON index does not support JSON_QUERY, every predicate that references it should fail term extraction
     Y_UNIT_TEST(JsonQuery) {
         TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
             ValidateError(db, R"(JSON_QUERY(Text, '$.k1') IS NOT NULL)");
@@ -2146,9 +2720,37 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateError(db, R"((JSON_QUERY(Text, '$.k1') IS NOT NULL) AND (JSON_QUERY(Text, '$.k2') IS NOT NULL) OR (JSON_QUERY(Text, '$.k3') IS NOT NULL))");
             ValidateError(db, R"(((JSON_QUERY(Text, '$.k1') IS NOT NULL) AND (JSON_QUERY(Text, '$.k2') IS NOT NULL)) OR (JSON_QUERY(Text, '$.k3') IS NOT NULL))");
 
-            ValidateError(db, R"((JSON_EXISTS(Text, '$.k1') AND (JSON_QUERY(Text, '$.k2') IS NOT NULL)))");
+            ValidateTokens(db, R"((JSON_EXISTS(Text, '$.k1') AND (JSON_QUERY(Text, '$.k2') IS NOT NULL)))", {"\3k1"});
             ValidateError(db, R"((JSON_EXISTS(Text, '$.k1') OR (JSON_QUERY(Text, '$.k2') IS NOT NULL)))");
-            ValidateError(db, R"((JSON_VALUE(Text, '$.k1') = "1") AND (JSON_QUERY(Text, '$.k2') IS NOT NULL))");
+            ValidateTokens(db, R"((JSON_VALUE(Text, '$.k1' RETURNING Utf8) = "1") AND (JSON_QUERY(Text, '$.k2') IS NOT NULL))", {"\3k1" + strSuffix("1")});
+        });
+    }
+
+    // RETURNING clause is mandatory for JSON_VALUE in JSON index predicates
+    Y_UNIT_TEST(JsonValueRequiresReturning) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            static const char* kErr = "RETURNING clause is required for JSON_VALUE in JSON index predicates";
+
+            // Without RETURNING
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') == "v"u)", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') != "v"u)", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') > "a"u)", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') < "z"u)", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') IN ("a"u, "b"u))", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1.k2') == "v"u)", kErr);
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1.type()') == "v"u)", kErr);
+
+            // One JSON_VALUE is indexable
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == JSON_VALUE(Text, '$.k2'))", {"\3k1"}, "and");
+
+            // With RETURNING
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "v"u)", {"\3k1" + strSuffix("v")});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING String) == "v"s)", {"\3k1" + strSuffix("v")});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) == 1)", {"\3k1" + numSuffix(1)});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) == 1l)", {"\3k1" + numSuffix(1)});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Double) == 1.0)", {"\3k1" + numSuffix(1)});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Bool))", {"\3k1" + trueSuffix});
         });
     }
 
@@ -2174,13 +2776,13 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Datetime) == Datetime("2021-01-01T00:00:00Z"))");
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Timestamp) == Timestamp("2021-01-01T00:00:00Z"))");
 
-            // Default RETURNING type is Utf8
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == "1")", {"\3k1" + strSuffix("1")});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == "string")", {"\3k1" + strSuffix("string")});
+            // Explicit RETURNING Utf8 (implicit default no longer allowed)
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "1")", {"\3k1" + strSuffix("1")});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "string")", {"\3k1" + strSuffix("string")});
 
             // Negation
-            ValidateError(db, R"(JSON_VALUE(Text, '$.key') IS NULL)");
-            ValidateError(db, R"(JSON_VALUE(Text, '$.key') IS NOT NULL)"); 
+            ValidateError(db, R"(JSON_VALUE(Text, '$.key' RETURNING Utf8) IS NULL)");
+            ValidateError(db, R"(JSON_VALUE(Text, '$.key' RETURNING Utf8) IS NOT NULL)"); 
 
             // JV(...) == true is equivalent to standalone JV(...) - collects trueSuffix token
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Bool) == true)", {"\3k1" + trueSuffix});
@@ -2234,12 +2836,12 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateTokens(db,
                 R"(JSON_VALUE(Text, '$.k2' RETURNING Int32) == JSON_VALUE(Text, '$.k1' RETURNING Int32))",
                 {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') != JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') > JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') >= JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') < JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') <= JSON_VALUE(Text, '$.k2'))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) != JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) > JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) >= JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) < JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) <= JSON_VALUE(Text, '$.k2' RETURNING Utf8))", {"\3k1", "\3k2"}, "and");
 
             // JSON_VALUE RETURNING Bool comparison is not supported
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Bool) == JSON_VALUE(Text, '$.k2' RETURNING Bool))");
@@ -2253,7 +2855,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateError(db, R"(NOT (JSON_VALUE(Text, '$.k1' RETURNING Bool) > JSON_VALUE(Text, '$.k2' RETURNING Bool)))");
 
             // For some nodes inside the path, the collected result cannot be combined with == operator
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1 starts with "1"') == "true")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1 starts with "1"' RETURNING Utf8) == "true")", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.size()' RETURNING Int32) == 2)", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.*' RETURNING Int32) == 2)", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1[*]' RETURNING Int32) == 2)", {"\3k1" + numSuffix(2)});
@@ -2273,10 +2875,10 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
 
             // AND/OR combinations - string equality
             ValidateTokens(db,
-                R"(JSON_VALUE(Text, '$.k1') == "a" AND JSON_VALUE(Text, '$.k2') == "b")",
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" AND JSON_VALUE(Text, '$.k2' RETURNING Utf8) == "b")",
                 {"\3k1" + strSuffix("a"), "\3k2" + strSuffix("b")}, "and");
             ValidateTokens(db,
-                R"(JSON_VALUE(Text, '$.k1') == "a" OR JSON_VALUE(Text, '$.k2') == "b")",
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" OR JSON_VALUE(Text, '$.k2' RETURNING Utf8) == "b")",
                 {"\3k1" + strSuffix("a"), "\3k2" + strSuffix("b")}, "or");
 
             // AND/OR with range comparisons - path-only tokens
@@ -2289,10 +2891,10 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
 
             // AND/OR mixing equality and range
             ValidateTokens(db,
-                R"(JSON_VALUE(Text, '$.k1') == "a" AND JSON_VALUE(Text, '$.k2' RETURNING Int32) > 0)",
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" AND JSON_VALUE(Text, '$.k2' RETURNING Int32) > 0)",
                 {"\3k1" + strSuffix("a"), "\3k2"}, "and");
             ValidateTokens(db,
-                R"(JSON_VALUE(Text, '$.k1') == "a" OR JSON_VALUE(Text, '$.k2' RETURNING Int32) > 0)",
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" OR JSON_VALUE(Text, '$.k2' RETURNING Int32) > 0)",
                 {"\3k1" + strSuffix("a"), "\3k2"}, "or");
 
             // Three-way AND/OR
@@ -2312,16 +2914,16 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
                 {"\3k1" + numSuffix(1), "\3k2" + numSuffix(2), "\3k3" + numSuffix(3)}, "or");
 
             // Comparison operators with strings - path-only token (no value suffix for non-equality)
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') > "abc")", {"\3k1"});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') < "xyz")", {"\3k1"});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') >= "abc")", {"\3k1"});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') <= "xyz")", {"\3k1"});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') != "abc")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) > "abc")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) < "xyz")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) >= "abc")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) <= "xyz")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) != "abc")", {"\3k1"});
 
             // Flipped operand order - string comparisons
-            ValidateTokens(db, R"("abc" < JSON_VALUE(Text, '$.k1'))", {"\3k1"});
-            ValidateTokens(db, R"("abc" > JSON_VALUE(Text, '$.k1'))", {"\3k1"});
-            ValidateTokens(db, R"("abc" != JSON_VALUE(Text, '$.k1'))", {"\3k1"});
+            ValidateTokens(db, R"("abc" < JSON_VALUE(Text, '$.k1' RETURNING Utf8))", {"\3k1"});
+            ValidateTokens(db, R"("abc" > JSON_VALUE(Text, '$.k1' RETURNING Utf8))", {"\3k1"});
+            ValidateTokens(db, R"("abc" != JSON_VALUE(Text, '$.k1' RETURNING Utf8))", {"\3k1"});
 
             // Flipped operand order - numeric comparisons
             ValidateTokens(db, R"(10 < JSON_VALUE(Text, '$.k1' RETURNING Int32))", {"\3k1"});
@@ -2331,24 +2933,24 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateTokens(db, R"(10 != JSON_VALUE(Text, '$.k1' RETURNING Int32))", {"\3k1"});
 
             // STARTS WITH - path only token
-            ValidateTokens(db, R"(StartsWith(JSON_VALUE(Text, '$.k1'), "prefix"))", {"\3k1"});
-            ValidateTokens(db, R"(StartsWith(JSON_VALUE(Text, '$.k1'), "prefix") AND JSON_VALUE(Text, '$.k1') == "a")", {"\3k1" + strSuffix("a")});
+            ValidateTokens(db, R"(StartsWith(JSON_VALUE(Text, '$.k1' RETURNING Utf8), "prefix"))", {"\3k1"});
+            ValidateTokens(db, R"(StartsWith(JSON_VALUE(Text, '$.k1' RETURNING Utf8), "prefix") AND JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a")", {"\3k1" + strSuffix("a")});
 
             // ENDS WITH - path only token
-            ValidateTokens(db, R"(EndsWith(JSON_VALUE(Text, '$.k1'), "suffix"))", {"\3k1"});
+            ValidateTokens(db, R"(EndsWith(JSON_VALUE(Text, '$.k1' RETURNING Utf8), "suffix"))", {"\3k1"});
 
             // LIKE - path only token / ILIKE - not extractable (Re2)
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') LIKE "pattern%")", {"\3k1"});
-            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') ILIKE "pattern%")"); // udf
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) LIKE "pattern%")", {"\3k1"});
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) ILIKE "pattern%")"); // udf
 
             // REGEXP - not extractable (Re2)
-            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') REGEXP "^pattern$")"); // udf
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) REGEXP "^pattern$")"); // udf
 
             // String concatenation (||) in a comparison: JV1 inside concat is not indexable
             // If JV1 is the only JSON node - nothing to extract
-            ValidateError(db, R"((JSON_VALUE(Text, '$.k1') || "suffix") == "value_suffix")");
+            ValidateError(db, R"((JSON_VALUE(Text, '$.k1' RETURNING Utf8) || "suffix") == "value_suffix")");
             // AND: JV1 inside concat is non-indexable, but JV2 == "b" IS indexable - post-filter applies
-            ValidateTokens(db, R"((JSON_VALUE(Text, '$.k1') || "suffix") == "value_suffix" AND JSON_VALUE(Text, '$.k2') == "b")", {"\3k2" + strSuffix("b")});
+            ValidateTokens(db, R"((JSON_VALUE(Text, '$.k1' RETURNING Utf8) || "suffix") == "value_suffix" AND JSON_VALUE(Text, '$.k2' RETURNING Utf8) == "b")", {"\3k2" + strSuffix("b")});
 
             // Nested JSON_QUERY as JSON source for JSON_VALUE - not extractable
             ValidateError(db, R"(JSON_VALUE(JSON_QUERY(Text, '$.k1' WITHOUT ARRAY WRAPPER), '$.k2' RETURNING Int32) == 1)");
@@ -2363,9 +2965,9 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateError(db, R"(JSON_VALUE(JSON_QUERY(JSON_QUERY(JSON_QUERY(JSON_QUERY(Text, '$.a' WITHOUT ARRAY WRAPPER), '$.b' WITHOUT ARRAY WRAPPER), '$.c' WITHOUT ARRAY WRAPPER), '$.d' WITHOUT ARRAY WRAPPER), '$.e' RETURNING Int32) == 1)");
 
             // AND: JV1 inside JSON_QUERY is non-indexable, but JV2 == "w" IS indexable - post-filter applies
-            ValidateTokens(db, R"(JSON_VALUE(JSON_QUERY(Text, '$.a' WITHOUT ARRAY WRAPPER), '$.k' RETURNING Utf8) == "v"u AND JSON_VALUE(Text, '$.b') == "w")", {"\2b" + strSuffix("w")});
+            ValidateTokens(db, R"(JSON_VALUE(JSON_QUERY(Text, '$.a' WITHOUT ARRAY WRAPPER), '$.k' RETURNING Utf8) == "v"u AND JSON_VALUE(Text, '$.b' RETURNING Utf8) == "w")", {"\2b" + strSuffix("w")});
             // OR: JV1 inside JSON_QUERY is non-indexable, but JV2 == "w" IS indexable - post-filter does not apply
-            ValidateError(db, R"(JSON_VALUE(JSON_QUERY(Text, '$.a' WITHOUT ARRAY WRAPPER), '$.k' RETURNING Utf8) == "v"u OR JSON_VALUE(Text, '$.b') == "w")");
+            ValidateError(db, R"(JSON_VALUE(JSON_QUERY(Text, '$.a' WITHOUT ARRAY WRAPPER), '$.k' RETURNING Utf8) == "v"u OR JSON_VALUE(Text, '$.b' RETURNING Utf8) == "w")");
 
             // DEFAULT ON EMPTY with non-NULL value is negation
             ValidateError(db, R"(JSON_VALUE(Text, '$.key' RETURNING Int DEFAULT 12 ON EMPTY) > 10)");
@@ -2478,11 +3080,11 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
 
             // AND: three indexable JSON_* in one filter
             ValidateTokens(db,
-                R"((JSON_EXISTS(Text, '$.a') AND (JSON_VALUE(Text, '$.b' RETURNING Int32) == 0) AND (JSON_VALUE(Text, '$.c') == "z"u)))",
+                R"((JSON_EXISTS(Text, '$.a') AND (JSON_VALUE(Text, '$.b' RETURNING Int32) == 0) AND (JSON_VALUE(Text, '$.c' RETURNING Utf8) == "z"u)))",
                 {"\2a", "\2b" + numSuffix(0), "\2c" + strSuffix("z")}, "and");
 
             // AND with JSON_QUERY in the same predicate
-            ValidateError(db, R"((JSON_EXISTS(Text, '$.k1') AND (JSON_QUERY(Text, '$.k2') IS NOT NULL)))");
+            ValidateTokens(db, R"((JSON_EXISTS(Text, '$.k1') AND (JSON_QUERY(Text, '$.k2') IS NOT NULL)))", {"\3k1"});
 
             // (OR of indexable predicates) AND (non-indexable JSON predicate) - OR lookup + post-filter
             // Case 1: non-indexable is arithmetic JSON_VALUE
@@ -4017,6 +4619,39 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
         });
     }
 
+    Y_UNIT_TEST(JsonExistsFilterChain) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1) ? (@.k3 == 2)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2)}, "and");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1 && @.k3 == 2)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2)}, "and");
+
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$ ? (@.k1 >= 10) ? (@.k2 <= 20)'))",
+                {"\3k1", "\3k2"}, "and");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1) ? (@.k3 == 2) ? (@.k4 == 3)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2), "\3k1\3k4" + numSuffix(3)}, "and");
+
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1 || @.k3 == 2) ? (@.k4 == 3)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2), "\3k1\3k4" + numSuffix(3)}, "or");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1) ? (@.k3 == 2 || @.k4 == 3)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2), "\3k1\3k4" + numSuffix(3)}, "or");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 1 && @.k3 == 2) ? (@.k4 == 3 || @.k5 == 4)'))",
+                {"\3k1\3k2" + numSuffix(1), "\3k1\3k3" + numSuffix(2), "\3k1\3k4" + numSuffix(3), "\3k1\3k5" + numSuffix(4)},
+                "or");
+
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (exists(@.k2)) ? (@.k3 > 0)'))",
+                {"\3k1\3k2", "\3k1\3k3"}, "and");
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 starts with "a") ? (@.k3 == 1)'))",
+                {"\3k1\3k2", "\3k1\3k3" + numSuffix(1)}, "and");
+
+            ValidateTokens(db, R"(JSON_EXISTS(Text, '$.items[*] ? (exists(@.id)) ? (@.id > 0)'))",
+                {"\6items\3id"}, "and");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.items[*] ? (exists(@.id)) ? (@.id == 1).id' RETURNING Int64) = 1)",
+                {"\6items\3id" + numSuffix(1)}, "and");
+        });
+    }
+
     Y_UNIT_TEST(JsonPruningPrefixRelationships) {
         TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
             // OR pruning between distinct paths
@@ -4077,7 +4712,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) BETWEEN 1l AND 10l)", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Double) BETWEEN 1.0 AND 10.0)", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) BETWEEN "a" AND "z")", {"\3k1"});
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') BETWEEN "a" AND "z")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) BETWEEN "a" AND "z")", {"\3k1"});
             // BETWEEN with a deeper path
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.k2' RETURNING Int32) BETWEEN 1 AND 10)", {"\3k1\3k2"});
 
@@ -4088,7 +4723,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             // NOT IN - negation
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) NOT IN ("a", "b", "c"))");
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) NOT IN (1, 2, 3))");
-            ValidateError(db, R"(JSON_VALUE(Text, '$.k1') NOT IN ("a", "b"))");
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) NOT IN ("a", "b"))");
 
             // IN
             ValidateTokens(db,
@@ -4098,7 +4733,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
                 R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN (1, 2, 3))",
                 {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2), "\3k1" + numSuffix(3)}, "or");
             ValidateTokens(db,
-                R"(JSON_VALUE(Text, '$.k1') IN ("a", "b"))",
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN ("a", "b"))",
                 {"\3k1" + strSuffix("a"), "\3k1" + strSuffix("b")}, "or");
 
             // IN with all supported scalars
@@ -4177,10 +4812,10 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN (NULL, NULL))");
 
             // Members in list
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') IN ("1"u, Data))", {"\3k1"}, "or");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') IN (Data, "2"u))", {"\3k1"}, "or");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') IN (Data))", {"\3k1"}, "and");
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') IN (Data, Data || "data"u))", {"\3k1"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN ("1"u, Data))", {"\3k1"}, "or");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN (Data, "2"u))", {"\3k1"}, "or");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN (Data))", {"\3k1"}, "and");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN (Data, Data || "data"u))", {"\3k1"}, "and");
 
             // Parameters in list
             ValidateTokens(db,
@@ -4213,12 +4848,12 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
     Y_UNIT_TEST(JsonValueComparisons) {
         TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
             // = (single equals) is parsed as ==
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') = "abc")", {"\3k1" + strSuffix("abc")});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) = "abc")", {"\3k1" + strSuffix("abc")});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) = 5)", {"\3k1" + numSuffix(5)});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Bool) = true)", {"\3k1" + trueSuffix});
 
             // <> as alias of !=, path-only
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') <> "abc")", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) <> "abc")", {"\3k1"});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) <> 5)", {"\3k1"});
 
             // CAST in the literal position - YQL collapses CAST of a literal
@@ -4226,19 +4861,19 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) == CAST("10" AS Int32))", {"\3k1" + numSuffix(10)});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == CAST(10 AS Utf8))", {"\3k1" + strSuffix("10")});
             // CAST of a non-literal column - not a TCoDataCtor on RHS, path-only
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == CAST(Data AS Utf8))", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == CAST(Data AS Utf8))", {"\3k1"});
 
             // Just(...) wrapper unwrapped
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == Just("abc"u))", {"\3k1" + strSuffix("abc")});
             ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) == Just(5))", {"\3k1" + numSuffix(5)});
 
             // column reference on RHS - not a TCoDataCtor, path-only token
-            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1') == Data)", {"\3k1"});
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == Data)", {"\3k1"});
             // Reversed order
-            ValidateTokens(db, R"(Data == JSON_VALUE(Text, '$.k1'))", {"\3k1"});
+            ValidateTokens(db, R"(Data == JSON_VALUE(Text, '$.k1' RETURNING Utf8))", {"\3k1"});
 
             // UDF on the JSON_VALUE side - the JSON predicate itself is wrapped, not extractable
-            ValidateError(db, R"(String::AsciiToUpper(JSON_VALUE(Text, '$.k1')) == "ABC")");
+            ValidateError(db, R"(String::AsciiToUpper(JSON_VALUE(Text, '$.k1' RETURNING Utf8)) == "ABC")");
         });
     }
 
@@ -4339,6 +4974,7 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
                     Key Uint64,
                     Text JsonDocument,
                     Text2 JsonDocument,
+                    Text3 JsonDocument,
                     Data Utf8,
                     PRIMARY KEY (Key)
                 );
@@ -4355,37 +4991,593 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
             UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
         }
 
-        // AND/OR of indexable predicates on different JSON columns - rejected.
-        ValidateError(db,
-            R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text2, '$.k2'))",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
-            R"(JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text2, '$.k2'))",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
-            R"(JSON_EXISTS(Text2, '$.k1') AND JSON_EXISTS(Text, '$.k2'))",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
+        {
+            const auto query = R"(
+                ALTER TABLE TestTable ADD INDEX json_idx2 GLOBAL USING json ON (Text2)
+            )";
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        // AND/OR of indexable predicates on different JSON columns
+        ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text2, '$.k2'))", {"\3k1"}, "and");
+        ValidateError(db, R"(JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text2, '$.k2'))");
+        ValidateTokens(db, R"(JSON_EXISTS(Text2, '$.k1') AND JSON_EXISTS(Text, '$.k2'))", {"\3k2"}, "and");
+        ValidateError(db, R"(JSON_EXISTS(Text2, '$.k1') OR JSON_EXISTS(Text, '$.k2'))");
+
+        ValidateTokens(db,
             R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" AND JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
-            R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" OR JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
-            R"(JSON_EXISTS(Text, '$.k1') AND JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")",
-            "Cross-column predicates are not supported");
+            {"\3k1" + strSuffix("a")}, "and");
+        ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" OR JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")");
+        ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")", {"\3k1"}, "and");
+        ValidateError(db, R"(JSON_EXISTS(Text, '$.k1') OR JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")");
 
         // Same predicate on different columns combined with non-indexable
-        ValidateError(db,
+        ValidateTokens(db,
             R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text2, '$.k2') AND Data = "x"u)",
-            "Cross-column predicates are not supported");
+            {"\3k1"}, "and");
+
         // Cross-column comparison directly between JSON columns
-        ValidateError(db,
-            R"(JSON_VALUE(Text, '$.k1') == JSON_VALUE(Text2, '$.k2'))",
-            "Cross-column predicates are not supported");
-        ValidateError(db,
-            R"(JSON_VALUE(Text2, '$.k1') == JSON_VALUE(Text, '$.k2'))",
-            "Cross-column predicates are not supported");
+        ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == JSON_VALUE(Text2, '$.k2' RETURNING Utf8))",
+            {"\3k1"}, "and");
+        ValidateTokens(db, R"(JSON_VALUE(Text2, '$.k1' RETURNING Utf8) == JSON_VALUE(Text, '$.k2' RETURNING Utf8))",
+            {"\3k2"}, "and");
+
+        // One of predicates is not indexable
+        ValidateTokens(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text3, '$.k2'))", {"\3k1"}, "and");
+        ValidateTokens(db, R"(JSON_EXISTS(Text3, '$.k2') AND JSON_EXISTS(Text, '$.k1'))", {"\3k1"}, "and");
+
+        ValidateError(db, R"(JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text2, '$.k2'))");
+        ValidateError(db, R"(JSON_EXISTS(Text3, '$.k2') OR JSON_EXISTS(Text, '$.k1'))");
+
+        ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" AND JSON_VALUE(Text3, '$.k2' RETURNING Utf8) == "b")",
+            {"\3k1" + strSuffix("a")}, "and");
+        ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a" OR JSON_VALUE(Text2, '$.k2' RETURNING Utf8) == "b")");
+
+        ValidateTokens(db, R"(JSON_VALUE(Text3, '$.k2' RETURNING Utf8) == "b" AND JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a")",
+            {"\3k1" + strSuffix("a")}, "and");
+        ValidateError(db, R"(JSON_VALUE(Text3, '$.k2' RETURNING Utf8) == "b" OR JSON_VALUE(Text, '$.k1' RETURNING Utf8) == "a")");
+    }
+
+    // JSON_VALUE IN $param
+    Y_UNIT_TEST(JsonValueInListParam) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Collectable path
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN $p)",
+                {NJsonIndex::TToken{"\3k1", "$p"}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Int64(1)
+                    .AddListItem().Int64(0)
+                    .EndList().Build().Build(),
+                "or");
+
+            // Deep path
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.k2' RETURNING Utf8) IN $p)",
+                {NJsonIndex::TToken{"\3k1\3k2", "$p"}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("a")
+                    .EndList().Build().Build(),
+                "or");
+
+            // Non-collectable path 1
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.type()' RETURNING Utf8) IN $p)",
+                {NJsonIndex::TToken{"\3k1", ""}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("string")
+                    .EndList().Build().Build(),
+                "and");
+
+            // Non-collectable path 2
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1.*' RETURNING Utf8) IN $p)",
+                {NJsonIndex::TToken{"\3k1", ""}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("v")
+                    .EndList().Build().Build(),
+                "and");
+
+            // Supported scalar item types in list
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Utf8) IN $p)",
+                {NJsonIndex::TToken{"\3k1", "$p"}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Utf8("x")
+                    .EndList().Build().Build(),
+                "or");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN $p)",
+                {NJsonIndex::TToken{"\3k1", "$p"}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Int32(1)
+                    .EndList().Build().Build(),
+                "or");
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Double) IN $p)",
+                {NJsonIndex::TToken{"\3k1", "$p"}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Double(1.5)
+                    .EndList().Build().Build(),
+                "or");
+
+            // RETURNING Bool with list param is not supported
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Bool) IN $p)",
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Bool(true)
+                    .EndList().Build().Build());
+
+            // AND with another predicate: OR wins (list param carries OR mode into merge)
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN $p AND JSON_EXISTS(Text, '$.k2'))",
+                {NJsonIndex::TToken{"\3k1", "$p"}, NJsonIndex::TToken{"\3k2", ""}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Int64(1)
+                    .EndList().Build().Build(),
+                "or");
+
+            // OR with another predicate: stays OR
+            ValidateTokens(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int64) IN $p OR JSON_EXISTS(Text, '$.k2'))",
+                {NJsonIndex::TToken{"\3k1", "$p"}, NJsonIndex::TToken{"\3k2", ""}},
+                TParamsBuilder().AddParam("$p").BeginList()
+                    .AddListItem().Int64(1)
+                    .EndList().Build().Build(),
+                "or");
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_List_Literal) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // List<String?>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN ['1', '2']",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [Just('1'), '2']",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [Just('1'), Just('2')]",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+
+            // List<String?>?
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(['1', '2'])",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just([Just('1'), Just('2')])",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+
+            // AsList[Strict]
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN AsList('1', '2')",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN AsListStrict('1', '2')",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(AsList('1', '2'))",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(AsListStrict('1', '2'))",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(AsList(Just('1'), Just('2')))",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(AsListStrict(Just('1'), Just('2')))",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+
+            // Empty list -> always false, index not applicable
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN ListCreate(String)");
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(ListCreate(String))");
+
+            // NULL in list -> negation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [Just('1'), NULL]");
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [Just('1'), Nothing(Optional<String>)]");
+
+            // Parameters
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [$p1, $p2]",
+                {NJsonIndex::TToken{"\3k1", "$p1"}, NJsonIndex::TToken{"\3k1", "$p2"}},
+                TParamsBuilder()
+                    .AddParam("$p1").String("1").Build()
+                    .AddParam("$p2").String("2").Build()
+                    .Build(), "or");
+
+            // Optional parameters -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN [$p1, $p2]",
+                TParamsBuilder()
+                    .AddParam("$p1").OptionalString("1").Build()
+                    .AddParam("$p2").EmptyOptional(TTypeBuilder().Primitive(EPrimitiveType::String).Build()).Build()
+                    .Build());
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_List_Parameter) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // List<String>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p1",
+                {NJsonIndex::TToken{"\3k1", "$p1"}},
+                TParamsBuilder()
+                    .AddParam("$p1")
+                        .BeginList()
+                            .AddListItem().String("1")
+                            .AddListItem().String("2")
+                            .EndList()
+                        .Build()
+                    .Build(), "or");
+
+            // List<String?> -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p2",
+                TParamsBuilder()
+                    .AddParam("$p2")
+                        .BeginList()
+                            .AddListItem().OptionalString("1")
+                            .AddListItem().OptionalString("2")
+                            .EndList()
+                        .Build()
+                    .Build());
+
+            // List<String>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p3",
+                TParamsBuilder()
+                    .AddParam("$p3")
+                        .BeginOptional()
+                            .BeginList()
+                                .AddListItem().String("1")
+                                .AddListItem().String("2")
+                                .EndList()
+                            .EndOptional()
+                        .Build()
+                    .Build());
+
+            // List<String?>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p4",
+                TParamsBuilder()
+                    .AddParam("$p4")
+                        .BeginOptional()
+                            .BeginList()
+                                .AddListItem().OptionalString("1")
+                                .AddListItem().OptionalString("2")
+                                .EndList()
+                            .EndOptional()
+                        .Build()
+                    .Build());
+
+            // Empty list
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p5",
+                {NJsonIndex::TToken{"\3k1", "$p5"}},
+                TParamsBuilder()
+                    .AddParam("$p5")
+                        .EmptyList(TTypeBuilder().Primitive(EPrimitiveType::String).Build())
+                        .Build()
+                    .Build(), "or");
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_Tuple_Literal) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Tuple<Int32, Int32>
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN (1, 2))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Tuple<Int32?, Int32?>
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN (Just(1), Just(2)))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Tuple<Int32?, Int32?>?
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just((Just(1), Just(2))))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // AsTuple
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsTuple(1, 2))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsTuple(Just(1), Just(2)))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just(AsTuple(Just(1), Just(2))))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Different integers
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsTuple(1t, 2s, 3, 4l, 5u, 6.0f, 7.0))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2), "\3k1" + numSuffix(3),
+                 "\3k1" + numSuffix(4), "\3k1" + numSuffix(5), "\3k1" + numSuffix(6), "\3k1" + numSuffix(7)}, "or");
+
+            // NULL in tuple -> negation
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN (1, NULL))");
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsTuple(1, NULL))");
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsTuple(1, Nothing(Optional<Int32>)))");
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_Tuple_Parameter) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Tuple<String, String>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p1",
+                {NJsonIndex::TToken{"\3k1", "$p1"}},
+                TParamsBuilder()
+                    .AddParam("$p1")
+                        .BeginTuple()
+                            .AddElement().String("1")
+                            .AddElement().String("2")
+                        .EndTuple()
+                        .Build()
+                    .Build(), "or");
+
+            // Tuple<Int32, Int32>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING Int32) IN $p1",
+                {NJsonIndex::TToken{"\3k1", "$p1"}},
+                TParamsBuilder()
+                    .AddParam("$p1")
+                        .BeginTuple()
+                            .AddElement().Int32(1)
+                            .AddElement().Int32(2)
+                        .EndTuple()
+                        .Build()
+                    .Build(), "or");
+
+            // TODO: FlatMap Or Coalesce SqlIn Nth
+            // Tuple<Int32, Int64, Float, Double>
+            // ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING Int32) IN $p2",
+            //     {NJsonIndex::TToken{"\3k1", ""}},
+            //     TParamsBuilder()
+            //         .AddParam("$p2")
+            //             .BeginTuple()
+            //                 .AddElement().Int32(1)
+            //                 .AddElement().Int64(2)
+            //                 .AddElement().Float(3.0f)
+            //                 .AddElement().Double(4.0)
+            //             .EndTuple()
+            //             .Build()
+            //         .Build(), "and");
+
+            // Tuple<String?, String?> -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p3",
+                TParamsBuilder()
+                    .AddParam("$p3")
+                        .BeginTuple()
+                            .AddElement().OptionalString("1")
+                            .AddElement().OptionalString("2")
+                        .EndTuple()
+                        .Build()
+                    .Build());
+
+            // Tuple<String, String>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p4",
+                TParamsBuilder()
+                    .AddParam("$p4")
+                        .BeginOptional()
+                            .BeginTuple()
+                                .AddElement().String("1")
+                                .AddElement().String("2")
+                            .EndTuple()
+                        .EndOptional()
+                        .Build()
+                    .Build());
+
+            // Tuple<String?, String?>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p5",
+                TParamsBuilder()
+                    .AddParam("$p5")
+                        .BeginOptional()
+                            .BeginTuple()
+                                .AddElement().OptionalString("1")
+                                .AddElement().OptionalString("2")
+                            .EndTuple()
+                        .EndOptional()
+                        .Build()
+                    .Build());
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_Dict_Literal) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Dict<String, Int32>
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN {'1': 10, '2': 20})",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+
+            // Dict<Int32, String>
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN {1: 'a', 2: 'b'})",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Dict<Int32?, String> -> optional literal keys are OK
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN {Just(1): 'a', Just(2): 'b'})",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Just(Dict<...>) -> outer optional unwraps
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just({1: 'a', 2: 'b'}))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // AsDict
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDict(AsTuple(1, 'a'), AsTuple(2, 'b')))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDictStrict(AsTuple(1, 'a'), AsTuple(2, 'b')))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDict(AsTuple(Just(1), 'a'), AsTuple(Just(2), 'b')))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just(AsDict(AsTuple(Just(1), 'a'), AsTuple(Just(2), 'b'))))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Different integer key types
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDict(AsTuple(1t, 'a'), AsTuple(2s, 'b'), AsTuple(3, 'c'), AsTuple(4l, 'd')))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2), "\3k1" + numSuffix(3), "\3k1" + numSuffix(4)}, "or");
+
+            // Empty dict -> always false, index not applicable
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN DictCreate(String, String)");
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(DictCreate(String, String))");
+
+            // NULL key in dict -> negation
+            ValidateError(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDict(AsTuple(1, 'a'), AsTuple(Nothing(Optional<Int32>), 'b')))");
+
+            // NULL value in dict is allowed (we only care about keys)
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsDict(AsTuple(1, Just('a')), AsTuple(2, Nothing(Optional<String>))))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Parameters as keys
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN AsDict(AsTuple($p1, 'a'), AsTuple($p2, 'b')))",
+                {NJsonIndex::TToken{"\3k1", "$p1"}, NJsonIndex::TToken{"\3k1", "$p2"}},
+                TParamsBuilder()
+                    .AddParam("$p1").String("1").Build()
+                    .AddParam("$p2").String("2").Build()
+                    .Build(), "or");
+
+            // Optional parameters as keys -> cannot check nulls during compilation
+            ValidateError(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN AsDict(AsTuple($p1, 'a'), AsTuple($p2, 'b')))",
+                TParamsBuilder()
+                    .AddParam("$p1").OptionalString("1").Build()
+                    .AddParam("$p2").EmptyOptional(TTypeBuilder().Primitive(EPrimitiveType::String).Build()).Build()
+                    .Build());
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_Dict_Parameter) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Dict<String, Int32>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p1",
+                {NJsonIndex::TToken{"\3k1", "$p1"}},
+                TParamsBuilder()
+                    .AddParam("$p1")
+                        .BeginDict()
+                            .AddDictItem().DictKey().String("1").DictPayload().Int32(10)
+                            .AddDictItem().DictKey().String("2").DictPayload().Int32(20)
+                        .EndDict()
+                        .Build()
+                    .Build(), "or");
+
+            // Dict<Int32, String>
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING Int32) IN $p1",
+                {NJsonIndex::TToken{"\3k1", "$p1"}},
+                TParamsBuilder()
+                    .AddParam("$p1")
+                        .BeginDict()
+                            .AddDictItem().DictKey().Int32(1).DictPayload().String("a")
+                            .AddDictItem().DictKey().Int32(2).DictPayload().String("b")
+                        .EndDict()
+                        .Build()
+                    .Build(), "or");
+
+            // Dict<String?, Int32> -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p2",
+                TParamsBuilder()
+                    .AddParam("$p2")
+                        .BeginDict()
+                            .AddDictItem().DictKey().OptionalString("1").DictPayload().Int32(10)
+                            .AddDictItem().DictKey().OptionalString("2").DictPayload().Int32(20)
+                        .EndDict()
+                        .Build()
+                    .Build());
+
+            // Dict<String, Int32>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p3",
+                TParamsBuilder()
+                    .AddParam("$p3")
+                        .BeginOptional()
+                            .BeginDict()
+                                .AddDictItem().DictKey().String("1").DictPayload().Int32(10)
+                                .AddDictItem().DictKey().String("2").DictPayload().Int32(20)
+                            .EndDict()
+                        .EndOptional()
+                        .Build()
+                    .Build());
+
+            // Dict<String?, Int32>? -> cannot check nulls during compilation
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p4",
+                TParamsBuilder()
+                    .AddParam("$p4")
+                        .BeginOptional()
+                            .BeginDict()
+                                .AddDictItem().DictKey().OptionalString("1").DictPayload().Int32(10)
+                                .AddDictItem().DictKey().OptionalString("2").DictPayload().Int32(20)
+                            .EndDict()
+                        .EndOptional()
+                        .Build()
+                    .Build());
+
+            // Empty dict
+            ValidateTokens(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN $p5",
+                {NJsonIndex::TToken{"\3k1", "$p5"}},
+                TParamsBuilder()
+                    .AddParam("$p5")
+                        .EmptyDict(
+                            TTypeBuilder().Primitive(EPrimitiveType::String).Build(),
+                            TTypeBuilder().Primitive(EPrimitiveType::Int32).Build())
+                        .Build()
+                    .Build(), "or");
+        });
+    }
+
+    Y_UNIT_TEST(SqlIn_Set_Literal) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // Set<String> via {} syntax
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN {'1', '2'})",
+                {"\3k1" + strSuffix("1"), "\3k1" + strSuffix("2")}, "or");
+
+            // Set<Int32>
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN {1, 2})",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Set<Int32?> -> optional literal keys are OK
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN {Just(1), Just(2)})",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // Just(Set<...>) -> outer optional unwraps
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just({1, 2}))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // AsSet
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSet(1, 2))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSetStrict(1, 2))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSet(Just(1), Just(2)))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just(AsSet(1, 2)))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN Just(AsSet(Just(1), Just(2))))",
+                {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2)}, "or");
+
+            // TODO: IsCallable("Convert")
+            // Different integer types
+            // ValidateTokens(db,
+            //     R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSet(1t, 2s, 3, 4l, 5u, 6.0f, 7.0))",
+            //     {"\3k1" + numSuffix(1), "\3k1" + numSuffix(2), "\3k1" + numSuffix(3),
+            //      "\3k1" + numSuffix(4), "\3k1" + numSuffix(5), "\3k1" + numSuffix(6), "\3k1" + numSuffix(7)}, "or");
+
+            // Empty set -> always false, index not applicable
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN SetCreate(String)");
+            ValidateError(db, "JSON_VALUE(Text, '$.k1' RETURNING String) IN Just(SetCreate(String))");
+
+            // NULL in set -> negation
+            ValidateError(db, R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSet(1, NULL))");
+            ValidateError(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING Int32) IN AsSet(Just(1), Nothing(Optional<Int32>)))");
+
+            // Parameters as keys
+            ValidateTokens(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN AsSet($p1, $p2))",
+                {NJsonIndex::TToken{"\3k1", "$p1"}, NJsonIndex::TToken{"\3k1", "$p2"}},
+                TParamsBuilder()
+                    .AddParam("$p1").String("1").Build()
+                    .AddParam("$p2").String("2").Build()
+                    .Build(), "or");
+
+            // Optional parameters as keys -> cannot check nulls during compilation
+            ValidateError(db,
+                R"(JSON_VALUE(Text, '$.k1' RETURNING String) IN AsSet($p1, $p2))",
+                TParamsBuilder()
+                    .AddParam("$p1").OptionalString("1").Build()
+                    .AddParam("$p2").EmptyOptional(TTypeBuilder().Primitive(EPrimitiveType::String).Build()).Build()
+                    .Build());
+        });
     }
 
     Y_UNIT_TEST(JsonFunctionsMisc) {
@@ -4399,10 +5591,10 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
                 "Comparison JSON_VALUE with RETURNING Bool is not supported");
 
             // JSON_VALUE inside string concatenation on the LHS - non-indexable
-            ValidateError(db, R"(("prefix:" || JSON_VALUE(Text, '$.k1')) == "prefix:abc")");
+            ValidateError(db, R"(("prefix:" || JSON_VALUE(Text, '$.k1' RETURNING Utf8)) == "prefix:abc")");
             // AND with this non-indexable form + indexable JE
             ValidateTokens(db,
-                R"(("prefix:" || JSON_VALUE(Text, '$.k1')) == "prefix:abc" AND JSON_EXISTS(Text, '$.k2'))",
+                R"(("prefix:" || JSON_VALUE(Text, '$.k1' RETURNING Utf8)) == "prefix:abc" AND JSON_EXISTS(Text, '$.k2'))",
                 {"\3k2"});
 
             // large numeric literals inside a JSON_EXISTS filter
@@ -4429,4 +5621,248 @@ Y_UNIT_TEST_SUITE(KqpJsonIndexTokens) {
         });
     }
 }
+
+Y_UNIT_TEST_SUITE(KqpJsonIndexesAutoSelect) {
+    Y_UNIT_TEST(JsonExists) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1'))");
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 2)'))");
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$ ? (@.k1 == true && @.k2 == false)'))");
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$ ? (@.k1 == null || @.k2 == "str")'))");
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(JsonValue) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Bool)");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) == 10");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) == -10");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) != 10");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) >= 10");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) BETWEEN 10 AND 20");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) NOT BETWEEN 10 AND 20");
+            ValidateAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) IN (1, 2, 3, 4)");
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(AndOrCombinations) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2'))");
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2'))");
+            ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2') AND JSON_EXISTS(Text, '$.k3'))");
+            ValidateAutoSelect(db, R"((JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2')) OR JSON_EXISTS(Text, '$.k3'))");
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(PrimaryColumnPredicate) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+        auto db = kikimr.GetQueryClient();
+
+        CreateTestTable(db, "JsonDocument", /* withIndex */ true);
+
+        // JI predicate
+        ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1')");
+
+        // JI predicate with primary -> primary wins
+        ValidateNoAutoSelect(db, "Key > 5 AND JSON_EXISTS(Text, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Key > 5");
+        ValidateNoAutoSelect(db, "Key = 1 AND JSON_EXISTS(Text, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Key = 1");
+
+        // Without JI predicate
+        ValidateNoAutoSelect(db, "Key > 5");
+        ValidateNoAutoSelect(db, "Key = 1");
+    }
+
+    Y_UNIT_TEST(SecondaryColumnPredicate) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+        auto db = kikimr.GetQueryClient();
+
+        {
+            const std::string query = R"(
+                CREATE TABLE TestTable (
+                    Key Uint64,
+                    Text JsonDocument,
+                    Data Utf8,
+                    PRIMARY KEY (Key),
+                    INDEX json_idx GLOBAL USING json ON (Text),
+                    INDEX data_idx GLOBAL ON (Data)
+                );
+            )";
+
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        // JI predicate
+        ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1')");
+
+        // JI predicate with secondary -> secondary wins
+        ValidateNoAutoSelect(db, "Data = 'b' AND JSON_EXISTS(Text, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Data = 'b'");
+        ValidateNoAutoSelect(db, "Data >= 'a' AND JSON_EXISTS(Text, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Data >= 'a'");
+
+        // Without JI predicate
+        ValidateNoAutoSelect(db, "Data = 'b'");
+        ValidateNoAutoSelect(db, "Data >= 'a'");
+    }
+
+    Y_UNIT_TEST(DataColumnPredicate) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Data = 'd1'");
+            ValidateAutoSelect(db, "Data = 'd1' AND JSON_EXISTS(Text, '$.k1')");
+
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR Data = 'd1'");
+            ValidateNoAutoSelect(db, "Data = 'd1' OR JSON_EXISTS(Text, '$.k1')");
+
+            ValidateAutoSelect(db, "Data = 'd1' AND JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2')");
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Data = 'd1' AND JSON_EXISTS(Text, '$.k2')");
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2') AND Data = 'd1'");
+
+            ValidateNoAutoSelect(db, "Data = 'd1' OR JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2')");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR Data = 'd1' OR JSON_EXISTS(Text, '$.k2')");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2') OR Data = 'd1'");
+
+            ValidateNoAutoSelect(db, "Data = 'd1' OR JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2')");
+            ValidateAutoSelect(db, "Data = 'd1' AND JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2')");
+
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR Data = 'd1' AND JSON_EXISTS(Text, '$.k2')");
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND Data = 'd1' OR JSON_EXISTS(Text, '$.k2')");
+
+            ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2') AND Data = 'd1'");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2') OR Data = 'd1'");
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(TwoJsonIndexes) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+        auto db = kikimr.GetQueryClient();
+
+        {
+            const std::string query = R"(
+                CREATE TABLE TestTable (
+                    Key Uint64,
+                    Text JsonDocument,
+                    Extra JsonDocument,
+                    Data Utf8,
+                    PRIMARY KEY (Key),
+                    INDEX json_idx_text GLOBAL USING json ON (Text),
+                    INDEX json_idx_extra GLOBAL USING json ON (Extra)
+                );
+            )";
+
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1')", "json_idx_text");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1')", "json_idx_extra");
+
+        ValidateAutoSelect(db, "JSON_EXISTS(Extra, '$.k1')", "json_idx_extra");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Extra, '$.k1')", "json_idx_text");
+
+        // Cross-column predicates are not supported
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Extra, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Extra, '$.k1')");
+    }
+
+    Y_UNIT_TEST(WrongColumn) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+        auto db = kikimr.GetQueryClient();
+
+        {
+            const std::string query = R"(
+                CREATE TABLE TestTable (
+                    Key Uint64,
+                    Text JsonDocument,
+                    Data JsonDocument,
+                    PRIMARY KEY (Key),
+                    INDEX json_idx GLOBAL USING json ON (Text),
+                );
+            )";
+
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1')");
+
+        ValidateAutoSelect(db, "JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Data, '$.k1')");
+        ValidateAutoSelect(db, "JSON_EXISTS(Data, '$.k1') AND JSON_EXISTS(Text, '$.k1')");
+
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Data, '$.k1')");
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Data, '$.k1') OR JSON_EXISTS(Text, '$.k1')");
+
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Data, '$.k1')");
+    }
+
+    Y_UNIT_TEST(NoJsonIndex) {
+        auto kikimr = Kikimr(/* enableJsonIndex */ true, /* enableJsonIndexAutoSelect */ true);
+        auto db = kikimr.GetQueryClient();
+
+        CreateTestTable(db, "JsonDocument", /* withIndex */ false);
+        FillTestTable(db, "TestTable", "JsonDocument");
+
+        ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.k1')");
+
+        {
+            const std::string query = R"(
+                ALTER TABLE TestTable ADD INDEX json_idx GLOBAL USING json ON (Text)
+            )";
+
+            auto result = db.ExecuteQuery(query, TTxControl::NoTx()).ExtractValueSync();
+            UNIT_ASSERT_C(result.IsSuccess(), result.GetIssues().ToString());
+        }
+
+        ValidateAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1'))");
+    }
+
+    Y_UNIT_TEST(Negation) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            // JE
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key' TRUE ON ERROR)");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') IS NULL");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') IS NOT NULL");
+            ValidateNoAutoSelect(db, "COALESCE(JSON_EXISTS(Text, '$.key'), true)");
+
+            ValidateNoAutoSelect(db, "NOT JSON_EXISTS(Text, '$.key')");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') == false");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') != true");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') == Just(false)");
+            ValidateNoAutoSelect(db, "JSON_EXISTS(Text, '$.key') != Just(true)");
+
+            // JV
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool DEFAULT TRUE ON EMPTY)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool DEFAULT TRUE ON ERROR)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool DEFAULT TRUE ON EMPTY DEFAULT TRUE ON ERROR)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) IS NULL");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) IS NOT NULL");
+            ValidateNoAutoSelect(db, "COALESCE(JSON_VALUE(Text, '$.key' RETURNING Bool), true)");
+
+            ValidateNoAutoSelect(db, "NOT JSON_VALUE(Text, '$.key' RETURNING Bool)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) == false");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) != true");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) == Just(false)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Bool) != Just(true)");
+
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Int32) IS NULL");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Int32) IS NOT NULL");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.key' RETURNING Int32) NOT IN (1, 2, 3)");
+        }, /* enableJsonIndexAutoSelect */ true);
+    }
+
+    Y_UNIT_TEST(FlagDisabled) {
+        TestSelectJsonWithIndex("JsonDocument", std::nullopt, [](TQueryClient& db, const auto&) {
+            ValidateNoAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1'))");
+            ValidateNoAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1 ? (@.k2 == 2)'))");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Bool)");
+            ValidateNoAutoSelect(db, "JSON_VALUE(Text, '$.k1' RETURNING Int64) == 10");
+            ValidateNoAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') AND JSON_EXISTS(Text, '$.k2'))");
+            ValidateNoAutoSelect(db, R"(JSON_EXISTS(Text, '$.k1') OR JSON_EXISTS(Text, '$.k2'))");
+        }, /* enableJsonIndexAutoSelect */ false);
+    }
+}
+
 }  // namespace NKikimr::NKqp
+
