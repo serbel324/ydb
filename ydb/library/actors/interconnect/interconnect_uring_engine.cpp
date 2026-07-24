@@ -1,7 +1,5 @@
 #include "interconnect_uring_engine.h"
 
-#ifdef __linux__
-
 #include "uring_recv_buffer_pool.h"
 #include "uring_context.h" // for TUringContext::IsSupported()
 
@@ -11,7 +9,7 @@
 #include <ydb/library/actors/core/actorsystem.h>
 #include <ydb/library/actors/core/actor.h>
 
-#include <ydb/library/actors/util/funnel_queue.h>
+#include <ydb/library/actors/protos/interconnect.pb.h>
 
 // Must be included AFTER YDB headers because linux/uapi headers pulled by
 // liburing may define macros that clash with project headers.
@@ -22,10 +20,12 @@
 
 #include <sys/socket.h>
 #include <sys/uio.h>
+#include <sys/timerfd.h>
 
 #include <cerrno>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -118,7 +118,8 @@ namespace NActors {
     };
 
     class TUringEngine final : public IUringEngine {
-        TActorSystem* const ActorSystem;
+        TActorSystem *ActorSystem = nullptr; // bound after construction via SetActorSystem()
+        std::once_flag ActorSystemInitFlag;
         std::atomic_bool Stopping{false};
 
         struct TRegisteredSession : TEventDeserializer::IEventProcessor {
@@ -134,20 +135,23 @@ namespace NActors {
             bool ReadPending = false;
             bool WritePending = false;
             bool UnregisterRequested = false;
+            const bool SendPings;
             TRcBuf WriteBuffer;
             std::deque<TContiguousSpan> OutgoingSpans;
             iovec Iov[MaxSpansPerWrite];
             size_t IovLen = 0;
             size_t UnsentBytes = 0;
 
+            const std::shared_ptr<std::atomic<int64_t>> ClockSkew;
+            const std::shared_ptr<std::atomic<uint64_t>> PingRTT;
+
             THashMap<TActorId, TIntrusivePtr<IReceiveCallback>> ReceiveCallbacks;
             NMonitoring::TDynamicCounters::TCounterPtr EventsReceived;
 
-            TEventDeserializer _TempDeser;
-
             TRegisteredSession(ui32 shardIdx, TIntrusivePtr<NInterconnect::TStreamSocket> socket, TActorId sessionId,
                     bool checksumming, TScopeId peerScopeId, std::function<void(TDisconnectReason)> onDisconnectCallback,
-                    TActorSystem *actorSystem)
+                    TActorSystem *actorSystem, bool sendPings, std::shared_ptr<std::atomic<int64_t>> clockSkew,
+                    std::shared_ptr<std::atomic<uint64_t>> pingRTT)
                 : ShardIdx(shardIdx)
                 , Socket(std::move(socket))
                 , SessionId(sessionId)
@@ -155,7 +159,9 @@ namespace NActors {
                 , ActorSystem(actorSystem)
                 , Serializer(checksumming)
                 , Deserializer(peerScopeId)
-                , _TempDeser(peerScopeId)
+                , SendPings(sendPings)
+                , ClockSkew(std::move(clockSkew))
+                , PingRTT(std::move(pingRTT))
             {}
 
             void Disconnect(TDisconnectReason reason) {
@@ -194,7 +200,7 @@ namespace NActors {
             // serialization/sending
 
             bool Serialize() {
-                if (UnsentBytes >= MinSerializeWindowSize) { // we have some bytes to send by now, don't trigger serialization
+                if (UnsentBytes >= MinSerializeWindowSize && !Serializer.HasOutOfBandTraffic()) {
                     return false;
                 }
 
@@ -234,14 +240,11 @@ namespace NActors {
                 return IovLen != 0;
             }
 
-            void ApplyBytesWritten(size_t num) {
+            void ApplyBytesWritten(size_t num, std::vector<ui64> *eventToWireTime) {
                 // Advance past exactly the bytes the kernel accepted. A writev can be short (e.g. under
                 // backpressure or on a real network), so drop only fully-sent spans and trim the span that
                 // straddles the boundary; the rest stay queued and are retried by the next writev.
                 for (size_t remaining = num; remaining && !OutgoingSpans.empty(); OutgoingSpans.pop_front()) {
-//                    static struct TNullProcessor : IEventProcessor { void PushEvent(std::unique_ptr<IEventHandle>) override {} } nullProcessor;
-//                    _TempDeser.Push(TRcBuf::Copy(OutgoingSpans.front().SubSpan(0, remaining)), &nullProcessor, {});
-
                     if (TContiguousSpan& front = OutgoingSpans.front(); front.size() <= remaining) {
                         remaining -= front.size();
                     } else {
@@ -253,7 +256,87 @@ namespace NActors {
                 Y_ABORT_UNLESS(num <= UnsentBytes, "num# %zu UnsentBytes# %zu", num, UnsentBytes);
                 UnsentBytes -= num;
 
-                Serializer.CommitProducedBytes(num);
+                Serializer.CommitProducedBytes(num, eventToWireTime);
+            }
+
+            ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+            // ping/clock skew management
+
+            NHPTimer::STime PingRequestSentTimestamp = 0;
+            NHPTimer::STime PingResponseSentTimestamp = 0;
+
+            void SendPingRequest() {
+                NActorsInterconnect::TSystemPayloadV2 systemRequest;
+                auto *r = systemRequest.AddRequests();
+                r->MutablePingRequest();
+                Serializer.Push(systemRequest);
+                PingRequestSentTimestamp = GetCycleCountFast();
+            }
+
+            void Process(NActorsInterconnect::TSystemPayloadV2& systemRequest) override {
+                std::optional<NActorsInterconnect::TSystemPayloadV2> response;
+
+                auto addRequest = [&] {
+                    if (!response) {
+                        response.emplace();
+                    }
+                    return response->AddRequests();
+                };
+
+                const NHPTimer::STime timestamp = GetCycleCountFast();
+                const TInstant now = Now();
+
+                auto calculateRoundTripTimeAndSkew = [&](auto& item, NHPTimer::STime sent) {
+                    const ui64 rtt = NHPTimer::GetSeconds(timestamp - sent) * 1e6;
+                    const i64 skew = item.GetWallClock() + rtt / 2 - now.MicroSeconds();
+                    RegisterPingAndSkew(rtt, skew);
+                };
+
+                for (const auto& item : systemRequest.GetRequests()) {
+                    switch (item.GetRequestCase()) {
+                        case NActorsInterconnect::TSystemPayloadV2::TRequest::kPingRequest: {
+                            // we have received PingRequest from the peer -- we have to remember when we got it, send
+                            // the reply and wait for PingConfirm to make up our ClockSkew value
+                            auto *pr = addRequest()->MutablePingResponse();
+                            pr->SetWallClock(now.MicroSeconds());
+                            PingResponseSentTimestamp = timestamp;
+                            break;
+                        }
+
+                        case NActorsInterconnect::TSystemPayloadV2::TRequest::kPingResponse: {
+                            calculateRoundTripTimeAndSkew(item.GetPingResponse(), PingRequestSentTimestamp);
+                            PingRequestSentTimestamp = 0;
+
+                            auto *pc = addRequest()->MutablePingConfirm();
+                            pc->SetWallClock(now.MicroSeconds());
+                            break;
+                        }
+
+                        case NActorsInterconnect::TSystemPayloadV2::TRequest::kPingConfirm:
+                            calculateRoundTripTimeAndSkew(item.GetPingConfirm(), PingResponseSentTimestamp);
+                            PingResponseSentTimestamp = 0;
+                            break;
+
+                        case NActorsInterconnect::TSystemPayloadV2::TRequest::REQUEST_NOT_SET:
+                            break;
+                    }
+                }
+
+                if (response) {
+                    Serializer.Push(*response);
+                }
+            }
+
+            ui64 PingValues[3] = {0, 0, 0};
+
+            void RegisterPingAndSkew(ui64 pingUs, i64 skew) {
+                ClockSkew->store(skew);
+
+                // calculate worst ping over three last times
+                PingValues[0] = PingValues[1];
+                PingValues[1] = PingValues[2];
+                PingValues[2] = pingUs;
+                PingRTT->store(Max(PingValues[0], PingValues[1], PingValues[2]));
             }
         };
 
@@ -262,6 +345,7 @@ namespace NActors {
                 kOpPipe = 1,
                 kOpRead,
                 kOpWrite,
+                kOpTimer,
             };
             static const ui64 kOpMask = (1 << 3) - 1;
 
@@ -275,6 +359,9 @@ namespace NActors {
             int ReadPipe;
             int WritePipe;
             char ReadPipeBuffer[256];
+
+            int TimerFd;
+            char ReadTimerBuffer[256];
 
             struct TSessionHash {
                 size_t operator()(const std::unique_ptr<TRegisteredSession>& p) const { return THash<void*>{}(p.get()); }
@@ -309,16 +396,16 @@ namespace NActors {
             NMonitoring::TDynamicCounters::TCounterPtr ReadUnavail;
             NMonitoring::TDynamicCounters::TCounterPtr WriteUnavail;
 
-            NMonitoring::TDynamicCounters::TCounterPtr ActiveTotalTime;
+            NMonitoring::TDynamicCounters::TCounterPtr OtherTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr CompleteWaitTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr SubmitWaitTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr ApplyBytesReadTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr ApplyBytesWrittenTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr SerializeBufferTotalTime;
             NMonitoring::TDynamicCounters::TCounterPtr SerializeEventTotalTime;
-            NMonitoring::TDynamicCounters::TCounterPtr ProduceOutputStreamOtherTotalTime;
 
             NMonitoring::THistogramPtr CommandDeliveryTime;
+            NMonitoring::THistogramPtr EventToWireTime;
             NMonitoring::THistogramPtr CompletionWaitTime;
             NMonitoring::THistogramPtr CommandExecTime;
             NMonitoring::THistogramPtr SubmitExecTime;
@@ -326,8 +413,12 @@ namespace NActors {
             NMonitoring::THistogramPtr CompletionsProcessedAtOnce;
             NMonitoring::THistogramPtr SubmissionsProcessedAtOnce;
 
-            THPTimer ActiveTimer;
-            NMonitoring::TDynamicCounters::TCounterPtr *CurrentActivityTime = &ActiveTotalTime;
+            ui64 LastActivitySwitchTimestamp = 0;
+            NMonitoring::TDynamicCounters::TCounterPtr *CurrentActivityTime = &OtherTotalTime;
+
+            const double Freq = 1e9 * NHPTimer::GetSeconds(1); // nanoseconds per cycle
+
+            std::vector<ui64> EventToWireTimeVec;
 
         private:
             class TActivityMeasure {
@@ -339,16 +430,20 @@ namespace NActors {
                     : Shard(shard)
                     , PrevActivityTime(std::exchange(shard.CurrentActivityTime, activityTime))
                 {
-//                    **PrevActivityTime += shard.ActiveTimer.PassedReset() * 1e9;
+                    **PrevActivityTime += UpdateTimestamp();
                 }
 
                 ~TActivityMeasure() {
-                    const ui64 delta = 0;
-//                    const ui64 delta = Shard.ActiveTimer.PassedReset() * 1e9;
+                    const ui64 delta = UpdateTimestamp();
                     if (Shard.CurrentActivityTime) {
                         **Shard.CurrentActivityTime += delta;
                     }
                     Shard.CurrentActivityTime = PrevActivityTime;
+                }
+
+                ui64 UpdateTimestamp() {
+                    const ui64 prevTimestamp = std::exchange(Shard.LastActivitySwitchTimestamp, GetCycleCountFast());
+                    return (Shard.LastActivitySwitchTimestamp - prevTimestamp) * Shard.Freq;
                 }
             };
 
@@ -356,10 +451,10 @@ namespace NActors {
 
         public:
             static NMonitoring::IHistogramCollectorPtr TimeCollector() {
-                return NMonitoring::ExponentialHistogram(22, 2);
+                return NMonitoring::ExponentialHistogram(22, 2, 1000);
             }
 
-            TShard(const NMonitoring::TDynamicCounterPtr& shardCounters)
+            TShard(const NMonitoring::TDynamicCounterPtr& shardCounters, bool sqpoll)
 #define COUNTER(NAME, DERIV) NAME(shardCounters->GetCounter(#NAME, DERIV))
                 : COUNTER(SessionsRegistered, true)
                 , COUNTER(SessionsUnregistered, true)
@@ -380,15 +475,15 @@ namespace NActors {
                 , COUNTER(ReadUnavail, true)
                 , COUNTER(WriteUnavail, true)
 #define TOTAL_TIME(NAME) NAME(shardCounters->GetCounter("TotalTime/" #NAME, true))
-                , TOTAL_TIME(ActiveTotalTime)
+                , TOTAL_TIME(OtherTotalTime)
                 , TOTAL_TIME(CompleteWaitTotalTime)
                 , TOTAL_TIME(SubmitWaitTotalTime)
                 , TOTAL_TIME(ApplyBytesReadTotalTime)
                 , TOTAL_TIME(ApplyBytesWrittenTotalTime)
                 , TOTAL_TIME(SerializeBufferTotalTime)
                 , TOTAL_TIME(SerializeEventTotalTime)
-                , TOTAL_TIME(ProduceOutputStreamOtherTotalTime)
                 , CommandDeliveryTime(shardCounters->GetNamedHistogram("sensor", "CommandDeliveryTime", TimeCollector()))
+                , EventToWireTime(shardCounters->GetNamedHistogram("sensor", "EventToWireTime", TimeCollector()))
                 , CompletionWaitTime(shardCounters->GetNamedHistogram("sensor", "CompletionWaitTime", TimeCollector()))
                 , CommandExecTime(shardCounters->GetNamedHistogram("sensor", "CommandExecTime", TimeCollector()))
                 , SubmitExecTime(shardCounters->GetNamedHistogram("sensor", "SubmitExecTime", TimeCollector()))
@@ -399,7 +494,11 @@ namespace NActors {
 #undef COUNTER
             {
                 // initialize ring for this shard
-                if (io_uring_queue_init(RingQueueDepth, &Ring, IORING_SETUP_SQPOLL) < 0) {
+                ui32 flags = 0;
+                if (sqpoll) {
+                    flags |= IORING_SETUP_SQPOLL;
+                }
+                if (io_uring_queue_init(RingQueueDepth, &Ring, flags) < 0) {
                     Y_ABORT("failed to initialize ring");
                 }
 
@@ -411,6 +510,17 @@ namespace NActors {
                 ReadPipe = fds[0];
                 WritePipe = fds[1];
 
+                // set timer
+                TimerFd = timerfd_create(CLOCK_MONOTONIC, 0);
+                Y_ABORT_UNLESS(TimerFd != -1);
+
+                // arm timer
+                itimerspec spec;
+                memset(&spec, 0, sizeof(spec));
+                spec.it_interval.tv_sec = 2; // every two seconds
+                spec.it_value.tv_sec = 2; // initial expiration
+                timerfd_settime(TimerFd, 0, &spec, nullptr);
+
                 // start worker thread
                 Worker = std::thread(std::bind(&TShard::WorkerThread, this));
             }
@@ -421,6 +531,7 @@ namespace NActors {
                 DrainQueue(); // free commands that were enqueued after the worker stopped (teardown races)
                 close(ReadPipe);
                 close(WritePipe);
+                close(TimerFd);
                 // remaining registered sessions are freed as the Sessions container is destroyed
             }
 
@@ -480,6 +591,7 @@ namespace NActors {
                     .Conn = conn,
                     .Callback = std::move(replyCallback),
                 };
+                reinterpret_cast<ui64&>(const_cast<TScopeId&>(ev->OriginScopeId)) = GetCycleCountFast();
                 const bool first = IncomingEventQueue.Push(std::move(ev));
                 if (first) {
                     ++*PushedAsFirst;
@@ -507,8 +619,7 @@ namespace NActors {
             }
 
             void SendInternal(ui64 conn, ui32 type, TActorId sender, TIntrusivePtr<IReceiveCallback> callback) {
-                SendImpl(conn, std::make_unique<IEventHandle>(type, 0, TActorId(), sender, nullptr, GetCycleCountFast()),
-                    std::move(callback));
+                SendImpl(conn, std::make_unique<IEventHandle>(type, 0, TActorId(), sender, nullptr, 0), std::move(callback));
             }
 
             // GetSQE returns next available SQ entry, setting up ItemsToSubmit counter in order to commence submission
@@ -524,7 +635,7 @@ namespace NActors {
                     uintptr_t sessionId = reinterpret_cast<uintptr_t>(session);
                     Y_ABORT_UNLESS((sessionId & kOpMask) == 0);
                     io_uring_sqe_set_data64(sqe, sessionId | op);
-                    Y_DEBUG_ABORT_UNLESS(op == kOpPipe ? session == nullptr : session != nullptr);
+                    Y_DEBUG_ABORT_UNLESS(op == kOpPipe || op == kOpTimer ? session == nullptr : session != nullptr);
                     ++*SQEAllocated;
                 }
                 return sqe;
@@ -532,9 +643,11 @@ namespace NActors {
 
             // DoSubmit performs actual io_uring submit operation for all allocated entries during the worker loop
             void DoSubmit() {
-                THPTimer timer;
+                ui64 enterTimestamp;
 
                 ACTIVITY(&SubmitWaitTotalTime) {
+                    enterTimestamp = LastActivitySwitchTimestamp;
+
                     for (;;) {
                         int res = io_uring_submit(&Ring);
                         if (res == -EINTR) {
@@ -548,7 +661,7 @@ namespace NActors {
                 }
 
                 ++*SubmitCount;
-                SubmitExecTime->Collect(timer.Passed() * 1e6);
+                SubmitExecTime->Collect((LastActivitySwitchTimestamp - enterTimestamp) * Freq);
                 SubmissionsProcessedAtOnce->Collect(ItemsToSubmit, 1u);
                 ItemsToSubmit = 0;
             }
@@ -559,12 +672,20 @@ namespace NActors {
                 io_uring_prep_read(sqe, ReadPipe, ReadPipeBuffer, sizeof(ReadPipeBuffer), -1);
             }
 
+            void PutTimer() {
+                io_uring_sqe *sqe = GetSQE(nullptr, kOpTimer);
+                Y_ABORT_UNLESS(sqe, "failed to obtain timer SQE: SQ overflow"); // TODO(alexvru): handle this somehow
+                io_uring_prep_read(sqe, TimerFd, ReadTimerBuffer, sizeof(ReadTimerBuffer), -1);
+            }
+
             void WorkerThread() {
+                LastActivitySwitchTimestamp = GetCycleCountFast();
+
                 pthread_setname_np(pthread_self(), "IC_uring");
-                ActiveTimer.Reset();
 
                 // prepare read request in order for sender threads to wake this one up when waiting on CQ
                 PutPipeReadRequest();
+                PutTimer();
 
                 for (;;) {
                     // submit any pending SQ's (if we have any)
@@ -576,13 +697,14 @@ namespace NActors {
                     WaitingForCQ.store(true);
                     if (IncomingEventQueue.IsEmpty()) {
                         io_uring_cqe *cqe;
-                        THPTimer timer;
+                        ui64 enterTimestamp;
                         ACTIVITY(&CompleteWaitTotalTime) {
+                            enterTimestamp = LastActivitySwitchTimestamp;
                             if (int res = io_uring_wait_cqe(&Ring, &cqe); res && res != -EINTR) {
                                 Y_ABORT("io_uring_wait_cqe() failed: %s", strerror(-res));
                             }
                         }
-                        CompletionWaitTime->Collect(timer.Passed() * 1e6);
+                        CompletionWaitTime->Collect((LastActivitySwitchTimestamp - enterTimestamp) * Freq);
                     }
                     WaitingForCQ.store(false);
 
@@ -610,8 +732,8 @@ namespace NActors {
                         TIntrusivePtr<IReceiveCallback> callback = std::move(payload.Callback);
                         payload.~TEventPayload();
 
+                        const ui64 cycleCountOnSend = reinterpret_cast<const ui64&>(ev->OriginScopeId);
                         const ui64 cycleCountOnEnter = GetCycleCountFast();
-                        bool isInternal = true;
 
                         switch (ev->Type) {
                             case static_cast<ui32>(ENetwork::EvRegisterCallback):
@@ -655,18 +777,13 @@ namespace NActors {
                                 }
                                 session.Serializer.Push(std::move(ev));
                                 IssueWritesForSession(session);
-                                isInternal = false;
                                 break;
                             }
                         }
 
                         const ui64 cycleCountOnExit = GetCycleCountFast();
-
-                        if (isInternal) {
-                            CommandDeliveryTime->Collect((cycleCountOnEnter - ev->Cookie) * 1'000'000 / NHPTimer::GetCyclesPerSecond());
-                        }
-
-                        CommandExecTime->Collect((cycleCountOnExit - cycleCountOnEnter) * 1'000'000 / NHPTimer::GetCyclesPerSecond());
+                        CommandDeliveryTime->Collect(NHPTimer::GetSeconds(cycleCountOnEnter - cycleCountOnSend) * 1e9);
+                        CommandExecTime->Collect(NHPTimer::GetSeconds(cycleCountOnExit - cycleCountOnEnter) * 1e9);
                     }
                 }
             }
@@ -676,6 +793,7 @@ namespace NActors {
 
             void DispatchCompletion(io_uring_cqe cqe) {
                 auto *session = reinterpret_cast<TRegisteredSession*>(uintptr_t(cqe.user_data) & ~uintptr_t(kOpMask));
+                Y_ABORT_UNLESS(!(cqe.flags & IORING_CQE_F_MORE)); // not expecting multiple completions
                 switch (static_cast<EOperationType>(cqe.user_data & kOpMask)) {
                     case kOpPipe:
                         // this operation is used just to break wait-CQE syscall and exit to process some commands; but
@@ -685,18 +803,31 @@ namespace NActors {
                         break;
 
                     case kOpRead:
-                        Y_ABORT_UNLESS(!(cqe.flags & IORING_CQE_F_MORE)); // not expecting multiple completions
                         Y_DEBUG_ABORT_UNLESS(session != nullptr);
                         DispatchRead(*session, cqe.res); // TODO(alexvru): maybe handle NONEMPTY (if it won't break equality)
                         break;
 
                     case kOpWrite:
-                        Y_ABORT_UNLESS(!(cqe.flags & IORING_CQE_F_MORE)); // not expecting multiple completions
                         Y_DEBUG_ABORT_UNLESS(session != nullptr);
                         DispatchWrite(*session, cqe.res);
                         break;
+
+                    case kOpTimer:
+                        Y_DEBUG_ABORT_UNLESS(session == nullptr);
+                        DispatchTimer();
+                        PutTimer();
+                        break;
                 }
                 ++*CQEProcessed;
+            }
+
+            void DispatchTimer() {
+                for (auto& session : Sessions) {
+                    if (!session->Terminated && session->SendPings && session->PingRequestSentTimestamp == 0) {
+                        session->SendPingRequest();
+                        IssueWritesForSession(*session);
+                    }
+                }
             }
 
             void DispatchRead(TRegisteredSession& session, i32 res) {
@@ -719,6 +850,7 @@ namespace NActors {
                         session.ApplyBytesRead(res);
                     }
                     IssueReadForSession(session);
+                    IssueWritesForSession(session);
                 }
 
                 MaybeEraseSession(session); // NB: may free `session`; must be the last use
@@ -753,7 +885,11 @@ namespace NActors {
                 } else {
                     *BytesSent += res;
                     ACTIVITY(&ApplyBytesWrittenTotalTime) {
-                        session.ApplyBytesWritten(res);
+                        session.ApplyBytesWritten(res, &EventToWireTimeVec);
+                        for (const ui64 time : EventToWireTimeVec) {
+                            EventToWireTime->Collect(time * Freq, 1u);
+                        }
+                        EventToWireTimeVec.clear();
                     }
                     IssueWritesForSession(session);
                 }
@@ -765,14 +901,15 @@ namespace NActors {
                 if (session.WritePending || session.Terminated || !session.Serializer.IsTrafficPending()) {
                     return;
                 }
-                ACTIVITY(nullptr) {
-                    if (session.Serialize()) {
-                        *SerializeBufferTotalTime += session.Serializer.GetSerializeBufferTime();
-                        *SerializeEventTotalTime += session.Serializer.GetSerializeEventTime();
-                        *ProduceOutputStreamOtherTotalTime += session.Serializer.GetOtherTime();
-                        *BytesCopied += session.Serializer.GetBytesCopied();
-                        *BytesAliased += session.Serializer.GetBytesAliased();
-                    }
+                if (session.Serialize()) {
+                    const ui64 serializeBufferTime = session.Serializer.GetSerializeBufferTime();
+                    const ui64 serializeEventTime = session.Serializer.GetSerializeEventTime();
+                    const ui64 prevTimestamp = std::exchange(LastActivitySwitchTimestamp, GetCycleCountFast());
+                    **CurrentActivityTime += (LastActivitySwitchTimestamp - prevTimestamp) * Freq - (serializeBufferTime + serializeEventTime);
+                    *SerializeBufferTotalTime += serializeBufferTime;
+                    *SerializeEventTotalTime += serializeEventTime;
+                    *BytesCopied += session.Serializer.GetBytesCopied();
+                    *BytesAliased += session.Serializer.GetBytesAliased();
                 }
                 if (session.PrepareIovec()) {
                     SubmitIovec(session);
@@ -812,13 +949,12 @@ namespace NActors {
         NMonitoring::TDynamicCounterPtr UringCounters;
 
     public:
-        TUringEngine(TActorSystem *actorSystem, ui32 numShards, NMonitoring::TDynamicCounterPtr counters)
-            : ActorSystem(actorSystem)
-            , UringCounters(std::move(counters))
+        TUringEngine(ui32 numShards, NMonitoring::TDynamicCounterPtr counters, bool sqpoll)
+            : UringCounters(std::move(counters))
         {
             Shards.reserve(numShards);
             for (ui32 i = 0; i < numShards; ++i) {
-                Shards.push_back(std::make_unique<TShard>(UringCounters->GetSubgroup("shard", "0" /*ToString(i)*/)));
+                Shards.push_back(std::make_unique<TShard>(UringCounters->GetSubgroup("shard", "0" /*ToString(i)*/), sqpoll));
             }
         }
 
@@ -826,14 +962,26 @@ namespace NActors {
             Stop();
         }
 
+        void SetActorSystem(TActorSystem* actorSystem) override {
+            Y_ABORT_UNLESS(actorSystem);
+            ActorSystem = actorSystem;
+            // Stop the reaper threads while the actor system is still up, so no completion is posted to a
+            // torn-down system.
+            actorSystem->DeferPreStop([self = TIntrusivePtr<IUringEngine>(this)] { self->Stop(); });
+        }
+
         ui64 Register(TIntrusivePtr<NInterconnect::TStreamSocket> socket, const TActorId& sessionActorId,
-                bool checksumming, TScopeId peerScopeId, std::function<void(TDisconnectReason)> onDisconnectCallback) override {
+                bool checksumming, TScopeId peerScopeId, std::function<void(TDisconnectReason)> onDisconnectCallback,
+                bool sendPings, std::shared_ptr<std::atomic<int64_t>> clockSkew,
+                std::shared_ptr<std::atomic<uint64_t>> pingRTT) override {
             if (Stopping) {
                 return 0; // engine is shutting down; caller treats 0 as a failed registration and terminates
             }
+            Y_ABORT_UNLESS(ActorSystem);
             const ui32 shardIdx = NextShardIdx++ % Shards.size();
             auto session = std::make_unique<TRegisteredSession>(shardIdx, std::move(socket), sessionActorId,
-                checksumming, peerScopeId, std::move(onDisconnectCallback), ActorSystem);
+                checksumming, peerScopeId, std::move(onDisconnectCallback), ActorSystem, sendPings, std::move(clockSkew),
+                std::move(pingRTT));
             const ui64 conn = reinterpret_cast<ui64>(session.get());
             Shards[shardIdx]->Register(std::move(session));
             return conn;
@@ -880,24 +1028,14 @@ namespace NActors {
         }
     };
 
-    TUringEnginePtr CreateUringEngine(TActorSystem* actorSystem, ui32 numShards, NMonitoring::TDynamicCounterPtr counters) {
+    TUringEnginePtr CreateUringEngine(ui32 numShards, NMonitoring::TDynamicCounterPtr counters, bool sqpoll) {
         if (!TUringContext::IsAvailable()) {
             return nullptr;
         }
         if (numShards < 1) {
             numShards = 1;
         }
-        return MakeIntrusive<TUringEngine>(actorSystem, numShards, std::move(counters));
+        return MakeIntrusive<TUringEngine>(numShards, std::move(counters), sqpoll);
     }
 
 } // namespace NActors
-
-#else // !__linux__
-
-namespace NActors {
-    TUringEnginePtr CreateUringEngine(TActorSystem*, ui32) {
-        return nullptr;
-    }
-}
-
-#endif
