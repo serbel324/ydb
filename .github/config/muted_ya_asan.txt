@@ -111,6 +111,7 @@ ydb/core/kqp/ut/scheme GeneratedStored.InsertReturningGeneratedWithDependencies
 ydb/core/kqp/ut/scheme GeneratedStored.InsertReturningGeneratedWithoutDependencies
 ydb/core/kqp/ut/scheme GeneratedStored.InsertReturningIndependentColumn
 ydb/core/kqp/ut/scheme GeneratedStored.InsertReturningMultipleRows
+ydb/core/kqp/ut/scheme GeneratedStored.InsertReturningStar
 ydb/core/kqp/ut/scheme GeneratedStored.MultipleDmlStatementsCommitAndAbortAtomically
 ydb/core/kqp/ut/scheme GeneratedStored.MultipleIndexesStayConsistentWithOneGeneratedColumn
 ydb/core/kqp/ut/scheme GeneratedStored.NonRowDependentRejected
@@ -496,6 +497,7 @@ ydb/tests/compatibility/indexes test_json_index.py.TestJsonIndex.test_json_index
 ydb/tests/compatibility/indexes test_json_index.py.TestJsonIndex.test_json_index[rolling_stable-26-3-1_to_prestable-26-4-1-strict]
 ydb/tests/compatibility/kv test_inflight_limit.py.TestKvInflightLimitCompatibility.test_current_proxy_returns_overloaded[mixed_current_and_intermediate]
 ydb/tests/compatibility/kv test_inflight_limit.py.TestKvInflightLimitCompatibility.test_old_proxy_handles_limit_response_from_current_tablet[mixed_current_and_intermediate]
+ydb/tests/compatibility/streaming test_streaming.py.TestStreamingMixedCluster.test_mixed_cluster[mixed_prestable-26-4-1_and_stable-26-3-1-False]
 ydb/tests/compatibility/topics test_direct_read.py.TestTopicDirectReadMixedCluster.test_direct_read_each_proxy_survives_tablet_move[mixed_prestable-26-4-1_and_stable-26-3-1]
 ydb/tests/compatibility/topics test_direct_read.py.TestTopicDirectReadMixedCluster.test_direct_read_each_proxy_survives_tablet_move[mixed_stable-26-3-1]
 ydb/tests/compatibility/topics test_direct_read.py.TestTopicDirectReadMixedCluster.test_direct_read_from_mid_blob_offset[mixed_prestable-26-4-1_and_stable-26-3-1]
@@ -533,6 +535,7 @@ ydb/tests/functional/audit test_canonical_records.py.test_dstool_evict_vdisk_grp
 ydb/tests/functional/dstool py3test.sole chunk
 ydb/tests/functional/dstool test_canonical_requests.py.Test.test_cluster_balance_skips_not_bsc_ready
 ydb/tests/functional/dstool test_canonical_requests.py.Test.test_cluster_get_set
+ydb/tests/functional/dstool test_canonical_requests.py.Test.test_essential
 ydb/tests/functional/dstool test_canonical_requests.py.Test.test_filter_healthy_groups_requires_bsc_ready
 ydb/tests/functional/dstool test_canonical_requests.py.Test.test_group_list_legacy_api
 ydb/tests/functional/dstool test_canonical_requests.py.Test.test_group_take_snapshot
