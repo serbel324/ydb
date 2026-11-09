@@ -1,6 +1,6 @@
 #include "events_schemeshard.h"
 #include "populator.h"
-#include "ut_helpers.h"
+#include "ut_schemeshard.h"
 
 #include <ydb/core/base/statestorage_impl.h>
 #include <ydb/core/scheme/scheme_pathid.h>

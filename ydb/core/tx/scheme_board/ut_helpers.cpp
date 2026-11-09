@@ -1,6 +1,7 @@
 #include "ut_helpers.h"
 
 #include <ydb/core/base/statestorage_impl.h>
+#include <ydb/core/testlib/basics/appdata.h>
 
 namespace NKikimr {
 namespace NSchemeBoard {

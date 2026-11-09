@@ -24,6 +24,7 @@ PEERDIR(
     ydb/core/testlib/actors
     ydb/core/testlib/basics/appdata
     ydb/core/testlib/basics/runtime
+    ydb/core/testlib/basics/state_storage
     ydb/core/tx/columnshard
     ydb/core/tx/general_cache
     ydb/core/tx/scheme_board
@@ -54,4 +55,5 @@ RECURSE(
     default
     pg
     runtime
+    state_storage
 )

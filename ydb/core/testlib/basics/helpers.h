@@ -4,6 +4,7 @@
 #include "runtime.h"
 
 #include <ydb/core/testlib/basics/runtime/tablet_helpers.h>
+#include <ydb/core/testlib/basics/state_storage/state_storage.h>
 
 #include <ydb/core/tablet_flat/shared_sausagecache.h>
 #include <ydb/core/util/defs.h>
@@ -33,15 +34,6 @@ namespace NFake {
     };
 }
 
-    using TStateStorageSetupper = std::function<void(TTestActorRuntime&, ui32)>;
-
-    void SetupStateStorage(TTestActorRuntime& runtime, ui32 nodeIndex,
-                           bool replicasOnFirstNode = false);
-    void SetupCustomStateStorage(TTestActorRuntime &runtime, ui32 NToSelect, ui32 nrings, ui32 ringSize, ui32 ringGroups = 1);
-    TStateStorageSetupper CreateCustomStateStorageSetupper(const TVector<TStateStorageInfo::TRingGroup>& ringGroups, int replicasInRingGroup);
-    TStateStorageSetupper CreateCustomStateStorageSetupper(const TVector<TStateStorageInfo::TRingGroup>& ringGroups,
-                                                           const THashMap<ui32, TVector<ui32>>& pileIdToNodeIds);
-    TStateStorageSetupper CreateDefaultStateStorageSetupper();
     void SetupBSNodeWarden(TTestActorRuntime& runtime, ui32 nodeIndex, TIntrusivePtr<TNodeWardenConfig> nodeWardenConfig);
     void SetupTabletResolver(TTestActorRuntime& runtime, ui32 nodeIndex);
     void SetupTabletPipePerNodeCaches(TTestActorRuntime& runtime, ui32 nodeIndex, bool forceFollowers = false);
@@ -76,7 +68,5 @@ namespace NFake {
 
     // Configure before runtime initialization; replace any earlier PDisk subsystem registration.
     void SetupPDiskSubsystem(TTestActorRuntime* runtime, bool stranded = true);
-
-    TActorId MakeBoardReplicaID(ui32 node, ui32 replicaIndex);
 
 }

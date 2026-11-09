@@ -8,9 +8,11 @@ PEERDIR(
     ydb/library/actors/interconnect
     ydb/library/actors/core
     library/cpp/testing/unittest
-    ydb/core/testlib/basics
     ydb/core/base
-    ydb/core/testlib/basics/default
+    ydb/core/testlib/basics/appdata
+    ydb/core/testlib/basics/runtime
+    ydb/core/testlib/basics/state_storage
+    yql/essentials/sql/pg_dummy
     yql/essentials/minikql/comp_nodes/llvm16
 )
 

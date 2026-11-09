@@ -3,14 +3,14 @@
 
 #include <ydb/core/scheme/scheme_pathid.h>
 #include <ydb/core/testlib/basics/appdata.h>
-#include <ydb/core/testlib/basics/helpers.h>
+#include <ydb/core/testlib/basics/state_storage/state_storage.h>
 
 #include <ydb/library/actors/core/log.h>
 #include <ydb/library/actors/core/interconnect.h>
 #include <ydb/library/actors/interconnect/interconnect_impl.h>
 #include <library/cpp/testing/unittest/registar.h>
 
-#include <ydb/core/testlib/basics/runtime.h>
+#include <ydb/core/testlib/basics/runtime/runtime.h>
 
 #include <util/generic/vector.h>
 #include <util/generic/xrange.h>

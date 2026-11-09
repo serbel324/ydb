@@ -1,6 +1,6 @@
 #include "cache.h"
 #include "helpers.h"
-#include "ut_helpers.h"
+#include "ut_schemeshard.h"
 
 #include <ydb/core/base/counters.h>
 #include <ydb/core/base/tablet_types.h>
