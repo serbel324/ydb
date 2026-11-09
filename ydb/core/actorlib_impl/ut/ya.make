@@ -17,7 +17,9 @@ PEERDIR(
     library/cpp/getopt
     library/cpp/svnversion
     ydb/core/testlib/actors
-    ydb/core/testlib/basics/default
+    ydb/core/testlib/basics/appdata
+    ydb/core/testlib/basics/runtime
+    yql/essentials/sql/pg_dummy
     yql/essentials/minikql/comp_nodes/llvm16
 )
 

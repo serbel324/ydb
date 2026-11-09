@@ -10,7 +10,9 @@ IF (NOT OS_WINDOWS)
         library/cpp/digest/md5
         library/cpp/testing/unittest
         ydb/core/protos
-        ydb/core/testlib/basics/default
+        ydb/core/testlib/basics/appdata
+        ydb/core/testlib/basics/runtime
+        yql/essentials/sql/pg_dummy
         ydb/core/util
         ydb/core/wrappers/ut_helpers
         ydb/library/aws_init

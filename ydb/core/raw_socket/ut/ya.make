@@ -8,7 +8,9 @@ SRCS(
 
 PEERDIR(
     ydb/core/raw_socket
-    ydb/core/testlib/default
+    ydb/core/testlib/basics/appdata
+    ydb/core/testlib/basics/runtime
+    yql/essentials/sql/pg_dummy
 )
 
 YQL_LAST_ABI_VERSION()

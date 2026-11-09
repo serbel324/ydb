@@ -12,7 +12,8 @@ SRCS(
 PEERDIR(
     library/cpp/testing/unittest
     ydb/core/fq/libs/row_dispatcher/purecalc_no_pg_wrapper
-    ydb/core/testlib/basics
+    ydb/core/testlib/basics/appdata
+    ydb/core/testlib/basics/runtime
     ydb/core/transfer
     ydb/core/tx/replication/service
     ydb/core/tx/scheme_cache

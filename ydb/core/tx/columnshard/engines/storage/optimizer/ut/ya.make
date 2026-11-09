@@ -4,7 +4,7 @@ SIZE(SMALL)
 
 PEERDIR(
     ydb/core/testlib/actors
-    ydb/core/testlib/basics
+    ydb/core/testlib/basics/appdata
     ydb/core/tx/columnshard
     ydb/core/tx/columnshard/test_helper
     ydb/library/actors/core

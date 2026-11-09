@@ -5,7 +5,8 @@ SIZE(MEDIUM)
 
 PEERDIR(
     library/cpp/testing/unittest
-    ydb/core/testlib/basics/default
+    ydb/core/testlib/basics/appdata
+    ydb/core/testlib/basics/runtime
     ydb/core/tx/scheme_cache
     ydb/core/tablet_flat/test/libs/table
     yql/essentials/public/udf/service/exception_policy

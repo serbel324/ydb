@@ -23,7 +23,8 @@ PEERDIR(
     ydb/core/tx/columnshard/counters
     yql/essentials/sql/pg_dummy
     yql/essentials/core/arrow_kernels/request
-    ydb/core/testlib/default
+    ydb/core/testlib/actors
+    ydb/core/testlib/basics/appdata
     ydb/core/tx/columnshard/test_helper
     ydb/core/tx/columnshard/hooks/abstract
     ydb/core/tx/columnshard/hooks/testing
