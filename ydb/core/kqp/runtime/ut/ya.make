@@ -11,7 +11,6 @@ SRCS(
     kqp_write_actor_ut.cpp
     kqp_write_table_ut.cpp
     scheduler/kqp_compute_scheduler_service_ut.cpp
-    scheduler/kqp_compute_scheduler_ut.cpp
     streaming/kqp_streaming_aggregation_ut.cpp
 )
 

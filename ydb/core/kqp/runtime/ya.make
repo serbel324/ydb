@@ -91,6 +91,7 @@ PEERDIR(
 END()
 
 RECURSE_FOR_TESTS(
+    scheduler/ut
     ut
     ut_vector_search
 )

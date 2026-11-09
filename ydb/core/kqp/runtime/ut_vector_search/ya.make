@@ -10,12 +10,11 @@ SRCS(
 )
 
 # PG support is required (TScopedAlloc's constructor calls PgInitializeMainContext), but a
-# stub suffices: ydb/core/testlib/basics/pg would pull the real pg_wrapper, whose PROVIDES
-# clashes with pg_dummy's anyway.
+# stub suffices.
 PEERDIR(
     library/cpp/testing/unittest
     ydb/core/testlib/actors
-    ydb/core/testlib/basics
+    ydb/core/testlib/basics/appdata
     yql/essentials/minikql/comp_nodes/llvm16
     yql/essentials/public/udf/service/exception_policy
     yql/essentials/sql/pg_dummy
