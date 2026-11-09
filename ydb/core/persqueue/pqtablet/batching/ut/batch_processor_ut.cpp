@@ -1,10 +1,11 @@
+#include <ydb/core/base/appdata.h>
+#include <ydb/core/base/feature_flags.h>
 #include <ydb/core/persqueue/pqtablet/batching/batch_processor.h>
 #include <ydb/core/persqueue/pqtablet/batching/consumer_batch_processor.h>
 #include <ydb/core/persqueue/public/codecs/kafka.h>
 #include <ydb/core/persqueue/public/constants.h>
 #include <ydb/core/persqueue/public/write_meta/write_meta.h>
-#include <ydb/core/testlib/basics/appdata.h>
-#include <ydb/core/testlib/basics/runtime.h>
+#include <ydb/core/testlib/basics/runtime/runtime.h>
 #include <ydb/library/actors/core/events.h>
 #include <ydb/library/services/services.pb.h>
 #include <ydb/public/sdk/cpp/src/library/kafka/kafka_messages_int.h>
@@ -15,8 +16,10 @@
 
 #include <util/generic/string.h>
 #include <util/stream/str.h>
+#include <util/string/builder.h>
 
 #include <limits>
+#include <utility>
 
 namespace NKikimr::NPQ::NBatching {
 namespace {
@@ -195,9 +198,10 @@ struct TEnv {
         : Runtime(1, false)
     {
         Runtime.SetLogBackend(new TStreamLogBackend(&Log));
-        TAppPrepare app;
-        app.FeatureFlags.SetEnableTabletRestartOnUnhandledExceptions(restartOnUnhandledExceptions);
-        Runtime.Initialize(app.Unwrap());
+        TTestBasicRuntime::TEgg egg;
+        egg.App0.Reset(new TAppData(0, 0, 0, 0, {}, nullptr, nullptr, nullptr, nullptr));
+        egg.App0->FeatureFlags.SetEnableTabletRestartOnUnhandledExceptions(restartOnUnhandledExceptions);
+        Runtime.Initialize(std::move(egg));
         Runtime.SetLogPriority(NKikimrServices::PERSQUEUE, NActors::NLog::PRI_ERROR);
         Tablet = Runtime.AllocateEdgeActor();
         Edge = Runtime.AllocateEdgeActor();

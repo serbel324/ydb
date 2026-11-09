@@ -17,9 +17,11 @@ PEERDIR(
     ydb/core/persqueue/events
     ydb/core/persqueue/public/write_meta
     ydb/core/protos
-    ydb/core/testlib/basics
-    ydb/core/testlib/default
+    ydb/core/testlib/basics/runtime
+    ydb/library/services
     ydb/public/sdk/cpp/src/library/kafka
+    yql/essentials/public/udf/service/exception_policy
+    yql/essentials/sql/pg_dummy
 )
 
 END()
