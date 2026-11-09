@@ -15,8 +15,9 @@ SRCS(
 )
 
 PEERDIR(
+    ydb/public/sdk/cpp/src/client/result
+    ydb/public/sdk/cpp/src/client/value
     yql/essentials/sql/pg_dummy
-    ydb/core/testlib
 )
 
 YQL_LAST_ABI_VERSION()

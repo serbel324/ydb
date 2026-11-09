@@ -9,11 +9,10 @@ PEERDIR(
 
     ydb/core/base
 
+    ydb/core/fq/libs/row_dispatcher/events
     ydb/core/fq/libs/row_dispatcher/format_handler/common
 
-    ydb/core/testlib
     ydb/core/testlib/actors
-    ydb/core/testlib/basics
 
     ydb/library/testlib/common
     ydb/library/yql/dq/actors

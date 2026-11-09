@@ -2,7 +2,8 @@
 #include <ydb/core/fq/libs/config/protos/checkpoint_coordinator.pb.h>
 #include <ydb/core/fq/libs/graph_params/proto/graph_params.pb.h>
 #include <ydb/core/testlib/actors/test_runtime.h>
-#include <ydb/core/testlib/basics/helpers.h>
+#include <ydb/core/testlib/basics/appdata.h>
+
 #include <ydb/library/actors/core/executor_pool_basic.h>
 #include <ydb/library/actors/core/scheduler_basic.h>
 #include <ydb/library/yql/dq/actors/compute/dq_compute_actor_checkpoints.h>

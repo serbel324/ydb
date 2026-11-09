@@ -1,6 +1,10 @@
 #include "cache.h"
 
-#include <ydb/services/ydb/ydb_common_ut.h>
+#include <library/cpp/testing/unittest/registar.h>
+
+#include <util/generic/hash.h>
+#include <util/generic/list.h>
+#include <util/generic/maybe.h>
 
 namespace NFq {
 

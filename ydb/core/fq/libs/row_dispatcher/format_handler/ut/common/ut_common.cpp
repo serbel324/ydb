@@ -4,9 +4,9 @@
 
 #include <ydb/core/fq/libs/row_dispatcher/events/data_plane.h>
 
-#include <ydb/core/testlib/basics/appdata.h>
-
 #include <ydb/library/yql/dq/common/rope_over_buffer.h>
+
+#include <util/string/builder.h>
 
 #include <yql/essentials/minikql/computation/mkql_computation_node_pack.h>
 #include <yql/essentials/minikql/invoke_builtins/mkql_builtins.h>

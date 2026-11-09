@@ -12,7 +12,7 @@ SRCS(
 
 PEERDIR(
     yql/essentials/sql/pg_dummy
-    ydb/core/testlib
+    yql/essentials/public/udf/service/exception_policy
 )
 
 YQL_LAST_ABI_VERSION()

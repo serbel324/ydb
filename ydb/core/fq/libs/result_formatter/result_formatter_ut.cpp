@@ -1,6 +1,8 @@
 #include "result_formatter.h"
 
-#include <ydb/services/ydb/ydb_common_ut.h>
+#include <library/cpp/testing/unittest/registar.h>
+
+#include <util/stream/str.h>
 
 using namespace NFq;
 

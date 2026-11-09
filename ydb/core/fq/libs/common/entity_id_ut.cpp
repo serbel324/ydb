@@ -1,6 +1,12 @@
 #include "entity_id.h"
 
-#include <ydb/services/ydb/ydb_common_ut.h>
+#include <library/cpp/testing/unittest/registar.h>
+
+#include <util/generic/hash_set.h>
+#include <util/generic/vector.h>
+
+#include <algorithm>
+
 #include <limits>
 
 using namespace NFq;

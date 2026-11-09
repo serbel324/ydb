@@ -8,7 +8,8 @@ PEERDIR(
     library/cpp/testing/unittest
     ydb/core/fq/libs/checkpointing
     ydb/core/testlib/actors
-    ydb/core/testlib/basics/default
+    ydb/core/testlib/basics/appdata
+    yql/essentials/sql/pg_dummy
 )
 
 SIZE(MEDIUM)

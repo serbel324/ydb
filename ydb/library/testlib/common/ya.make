@@ -10,7 +10,7 @@ PEERDIR(
     library/cpp/testing/unittest
     ydb/core/base
     ydb/core/testlib/actors
-    ydb/core/testlib/basics
+    ydb/core/testlib/basics/appdata
 )
 
 YQL_LAST_ABI_VERSION()
