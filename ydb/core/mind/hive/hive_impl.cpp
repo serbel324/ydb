@@ -662,15 +662,23 @@ void THive::Handle(TEvPrivate::TEvBootTablets::TPtr&) {
     RequestPoolsInformation();
     Schedule(TDuration::Minutes(5), new TEvPrivate::TEvLogHangingRequests);
     std::vector<TNodeInfo*> unimportantNodes; // ping nodes with tablets first
+    std::vector<std::pair<TNodeId, TActorId>> nodesToKill;
     unimportantNodes.reserve(Nodes.size());
     for (auto& [id, node] : Nodes) {
         if (node.IsUnknown() && node.Local) {
-            if (node.GetTabletsTotal() > 0) {
+            const auto* pile = BridgeInfo ? BridgeInfo->FindPile(node.BridgePileId) : nullptr;
+            if (pile && !NBridge::PileStateTraits(pile->State).AllowsConnection) {
+                nodesToKill.emplace_back(id, node.Local);
+            } else if (node.GetTabletsTotal() > 0) {
                 node.Ping();
             } else {
                 unimportantNodes.push_back(&node);
             }
         }
+    }
+    // KillNode may erase the node, so finish collecting nodes before calling it.
+    for (const auto& [nodeId, local] : nodesToKill) {
+        KillNode(nodeId, local, EHiveEventReason::PileUpdate);
     }
     for (auto* node : unimportantNodes) {
         node->Ping();
@@ -3850,6 +3858,9 @@ void THive::ProcessEvent(std::unique_ptr<IEventHandle> event) {
         hFunc(TEvTabletBase::TEvBlockBlobStorageResult, Handle);
         hFunc(TEvTabletBase::TEvDeleteTabletResult, Handle);
         hFunc(TEvHive::TEvReassignTablet, Handle);
+        hFunc(TEvReassignTablets::TEvCreateRequest, Handle);
+        hFunc(TEvReassignTablets::TEvCancelRequest, Handle);
+        hFunc(TEvReassignTablets::TEvGetRequest, Handle);
         hFunc(TEvHive::TEvInitiateBlockStorage, Handle);
         hFunc(TEvHive::TEvDeleteTablet, Handle);
         hFunc(TEvHive::TEvDeleteOwnerTablets, Handle);
@@ -3972,6 +3983,9 @@ STFUNC(THive::StateWork) {
         fFunc(TEvTabletBase::TEvBlockBlobStorageResult::EventType, EnqueueIncomingEvent);
         fFunc(TEvTabletBase::TEvDeleteTabletResult::EventType, EnqueueIncomingEvent);
         fFunc(TEvHive::TEvReassignTablet::EventType, EnqueueIncomingEvent);
+        fFunc(TEvReassignTablets::TEvCreateRequest::EventType, EnqueueIncomingEvent);
+        fFunc(TEvReassignTablets::TEvCancelRequest::EventType, EnqueueIncomingEvent);
+        fFunc(TEvReassignTablets::TEvGetRequest::EventType, EnqueueIncomingEvent);
         fFunc(TEvHive::TEvInitiateBlockStorage::EventType, EnqueueIncomingEvent);
         fFunc(TEvHive::TEvDeleteTablet::EventType, EnqueueIncomingEvent);
         fFunc(TEvHive::TEvDeleteOwnerTablets::EventType, EnqueueIncomingEvent);
