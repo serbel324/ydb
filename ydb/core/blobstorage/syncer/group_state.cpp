@@ -21,7 +21,7 @@ std::optional<TMirror3dcGroupConfiguration> GetConfiguration(const TGroupReplica
     return std::nullopt;
 }
 
-// W expands from 2 in Included to 2+2 in Included and Recovering on this edge.
+// W expands from 2 in Included to 2+2 in Included and Recovering on these edges.
 bool WaitForRecoveringVDiskStartup(EMirror3dcGroupState state) {
     using TGroupState = NKikimrBlobStorage::TGroupState;
     return state == TGroupState::DC_SOLO_RECOVERY_INV1_PENDING || state == TGroupState::DC_SOLO_RECOVERY_INV2_PENDING;
@@ -69,6 +69,7 @@ class TGroupStateActor : public TActorBootstrapped<TGroupStateActor> {
     std::set<ui32> RepairGroups;
     TVector<ui32> ActiveGroups;
     ui32 Cursor = 0;
+    std::optional<ui32> LastStartedRepairGroup;
     ui64 NextCookie = 0;
 
     void EraseQueries(ui32 groupId) {
@@ -218,22 +219,28 @@ class TGroupStateActor : public TActorBootstrapped<TGroupStateActor> {
         }
         EraseQueries(groupId);
         group->Pending = 0;
-        if (group->Stage == EStage::CheckPromotion) {
+        if (group->Stage == EStage::CheckPromotion || WaitForRecoveringVDiskStartup(*group->Info.GroupState)) {
             ProposeState(groupId, group);
             return;
         }
         StatusPollGroups.erase(groupId);
-        group->Stage = WaitForRecoveringVDiskStartup(*group->Info.GroupState) ? EStage::Propose : EStage::Repair;
+        group->Stage = EStage::Repair;
         RepairGroups.insert(groupId);
     }
 
     void RunRepairs() {
-        for (ui32 groupId : RepairGroups) {
+        auto it = LastStartedRepairGroup ? RepairGroups.upper_bound(*LastStartedRepairGroup) : RepairGroups.begin();
+        for (size_t remaining = RepairGroups.size(); remaining; --remaining) {
+            if (it == RepairGroups.end()) {
+                it = RepairGroups.begin();
+            }
+            const ui32 groupId = *it++;
             TGroup& group = Groups.at(groupId);
             if (group.Stage == EStage::Propose) {
                 ProposeState(groupId, &group);
             } else if (!group.RepairCookie && !group.ProposalCookie && RunningRepairs.size() < MaxRunningRepairs) {
                 StartRepair(groupId, &group);
+                LastStartedRepairGroup = groupId;
             }
         }
     }
@@ -261,8 +268,8 @@ class TGroupStateActor : public TActorBootstrapped<TGroupStateActor> {
                     continue;
                 }
                 const bool checkPromotion = group.Stage == EStage::CheckPromotion;
-                if (checkPromotion) {
-                    // Health must come from one round after repair, including on proposal retries.
+                if (checkPromotion || WaitForRecoveringVDiskStartup(*group.Info.GroupState)) {
+                    // These transitions require a fresh set of replies, including on proposal retries.
                     group.ConfirmedDisks.assign(group.Info.VDisks.size(), false);
                 }
                 ActiveGroups.push_back(groupId);
